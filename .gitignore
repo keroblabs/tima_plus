@@ -1,0 +1,8 @@
+devel/Musashi/.gitignore
+devel/Musashi/example/
+devel/Musashi/test/
+devel/umac/System70_boot.dsk
+devel/umac/build-cmake/
+devel/umac/ram.bin
+devel/umac/rom.bin
+
