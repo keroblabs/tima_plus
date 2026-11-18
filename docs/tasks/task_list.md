@@ -1,13 +1,13 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** Initial register — 18 November 2026  
+**Status:** Implementation review — 18 November 2026\
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
 **Programme plan:** [Development roadmap](../01-development-roadmap.md)
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current totals:** 2 registered / 2 OPEN / 0 IN_PROGRESS / 0 REVIEW / 0 RESOLVED / 0 CLOSED / 0 DEFERRED.
+**Current totals:** 2 registered / 0 OPEN / 0 IN_PROGRESS / 2 REVIEW / 0 RESOLVED / 0 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -17,8 +17,8 @@ No tickets formally opened under this category.
 
 | ID | Kind | Status | Title | Milestone | Ticket |
 | --- | --- | --- | --- | --- | --- |
-| [`PLUS-EMU-0004`](db/PLUS-EMU-0004.md) | `BUG` | `OPEN` | Implement Macintosh Plus NCR 5380 SCSI controller | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0004.md) |
-| [`PLUS-EMU-0005`](db/PLUS-EMU-0005.md) | `TASK` | `OPEN` | Emulate a SCSI hard disk backed by a BlueSCSI-compatible image | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0005.md) |
+| [`PLUS-EMU-0004`](db/PLUS-EMU-0004.md) | `BUG` | `REVIEW` | Implement Macintosh Plus NCR 5380 SCSI controller | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0004.md) |
+| [`PLUS-EMU-0005`](db/PLUS-EMU-0005.md) | `TASK` | `REVIEW` | Emulate a SCSI hard disk backed by a BlueSCSI-compatible image | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0005.md) |
 
 ## PLUS-SYS — Tima/Plus boot, storage, OS and desktop
 

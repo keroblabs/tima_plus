@@ -1,12 +1,12 @@
 # PLUS-EMU-0005 — Emulate a SCSI hard disk backed by a BlueSCSI-compatible image
 
 **ID:** `PLUS-EMU-0005`  
-**Status:** `OPEN`  
+**Status:** `REVIEW`\
 **Title:** Emulate a SCSI hard disk backed by a BlueSCSI-compatible image
 
 **Description**
 
-The Macintosh Plus emulator needs a **real SCSI target device model attached to its emulated SCSI bus**, not merely the NCR 5380 host controller. The present uMac has no SCSI disk target, and its `devel/umac/src/disc.c` is a ROM-patched/paravirtual **floppy** driver that bypasses SCSI hardware and must not be reused as a SCSI command shortcut.
+The Macintosh Plus emulator needs a **real SCSI target device model attached to its emulated SCSI bus**, not merely the NCR 5380 host controller. The inspected uMac baseline had no SCSI disk target. `devel/umac/src/disc.c` remains a ROM-patched/paravirtual **floppy** driver that bypasses SCSI hardware and must not be reused as a SCSI command shortcut.
 
 Implement a **lightweight direct-access SCSI target** attached behind `PLUS-EMU-0004`'s register-visible controller. Decode a completed command, read one sector from the image into a reusable **512-byte buffer**, and allow firmware to consume it **one byte per completed handshake** (or reverse the flow for a write). No dedicated bus/wire simulation or multiple-target framework is needed. The target must be able to mount the *same byte-for-byte disk image* intended to be used later on the physical M0001AP through BlueSCSI, without requiring an emulator-specific filesystem or ROM patch.
 
@@ -63,7 +63,7 @@ SCSI commands are decoded in the **target**, never in the NCR 5380 module. Prefe
 | `READ(6) (0x08)` | Core buffered 512-byte sectors, multiblock/count-0=256. |
 | `WRITE(6) (0x0A)` | Core inverse byte flow and persistent image writes. |
 | `INQUIRY (0x12)` | Core direct-access device identity/length. |
-| `MODE SENSE(6) (0x1A)` | Add required pages when traced/needed for ROM boot. |
+| `MODE SENSE(6) (0x1A)` | Current header and block descriptor advertise write protection and 512-byte blocks. Add mode pages only when needed. |
 | `READ CAPACITY(10) (0x25)` | Add when traced/needed; report **last valid LBA**, not block count. |
 | `READ(10)/WRITE(10) (0x28/0x2A)` | Add when traced/needed; zero block count means no transfer. |
 
@@ -88,16 +88,16 @@ The controller and disk can share a **single compiled SCSI subsystem** with a mi
 
 ### Acceptance checks — staged, not full bus conformance
 
-- [ ] Build and existing patched-ROM floppy/display/input smoke tests pass; no change in existing `-d` / `-w` behaviour.
-- [ ] One configured disk at target ID 1/LUN 0 responds to a valid selection; absent IDs do not respond. No invented ID discovery register or multiple-target engine.
-- [ ] COMMAND entry resets CDB position. Only six completed REQ/ACK handshakes deliver six READ(6) bytes; duplicate output-register writes or polling do not append bytes.
-- [ ] CDB `08 00 00 64 01 00` loads exactly 512 bytes from image LBA 100 / offset `100 * 512`; 512 valid guest CPU reads return exactly those bytes, then GOOD → COMMAND COMPLETE → BUS FREE. Raw status/data observation never advances the buffer.
-- [ ] WRITE(6) receives and commits exactly 512 bytes, including write protection and host errors; multiblock read/write reuse the same 512-byte buffer, count 0 means 256 blocks, and bounds/last-block handling are verified.
-- [ ] Core TEST UNIT READY, INQUIRY, REQUEST SENSE and CHECK CONDITION/error pathways are tested; required extra commands/pages are added in response to an original-ROM/driver trace rather than broad speculative coverage.
-- [ ] Both regular PIO and A9-selected pseudo-DMA exercise a complete command/data/status/message transaction through the guest-visible 5380. Test reset, invalid opcode, absent medium, not-ready, premature accesses and phase mismatches; never bypass registers or copy disk data into guest RAM directly.
-- [ ] Raw whole-device 512-byte-sector image handling validates file size and permissions, read-only/persistent semantics, and write survival after emulator shutdown/reopen. BlueSCSI image compatibility is byte-for-byte, not only filename-compatible.
-- [ ] With legal original Mac Plus ROM, disk driver/partition/System image when available, document detection/mount/boot results and ROM/image hashes, or explicitly mark original-ROM testing **NOT TESTED**.
-- [ ] Physical BlueSCSI/M0001AP same-image testing is separate; mark **NOT TESTED** if unavailable.
+- [x] Build and patched-ROM floppy/display/input smoke tests pass; `-d` / `-w` still select the independent floppy path.
+- [x] One configured disk at target ID 1/LUN 0 responds to a valid selection; absent IDs do not respond. No invented ID discovery register or multiple-target engine.
+- [x] COMMAND entry resets CDB position. Only six completed REQ/ACK handshakes deliver six READ(6) bytes; duplicate output-register writes or polling do not append bytes.
+- [x] CDB `08 00 00 64 01 00` loads exactly 512 bytes from image LBA 100 / offset `100 * 512`; 512 valid guest CPU reads return exactly those bytes, then GOOD → COMMAND COMPLETE → BUS FREE. Raw status/data observation never advances the buffer.
+- [x] WRITE(6) commits 512 bytes per completed sector, including write protection and host errors. Tests cover multiblock I/O, a count-zero 256-block read, bounds and the last block.
+- [x] Core TEST UNIT READY, INQUIRY, REQUEST SENSE and CHECK CONDITION/error pathways are tested. MODE SENSE(6) advertises write protection; no speculative mode pages or ten-byte commands are implemented.
+- [x] Both regular PIO and A9-selected pseudo-DMA exercise a complete command/data/status/message transaction through the guest-visible 5380. Tests cover reset, invalid opcode, absent medium, not-ready, premature accesses and phase mismatches without bypassing registers or copying disk data into guest RAM directly.
+- [x] Raw whole-device 512-byte-sector handling validates file size and permissions, read-only/persistent semantics, and write survival after closing/reopening. Tests compare raw file bytes at the written LBAs and their neighbors.
+- [ ] Full detection/mount/boot from a partitioned device image with an original Plus ROM is **NOT TESTED**. Isolated original V3 SCSI Manager read/write passed on generated raw media.
+- [ ] Physical BlueSCSI/M0001AP same-image testing is **NOT TESTED**.
 - [ ] Record implementation commits, review approval, any ROM-required commands and remaining unsupported functionality before closure.
 
 ### Out of scope
@@ -121,9 +121,15 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 
 - **2026-11-18 — Scope reduction (user discussion):** The disk can be a compact command decoder + one reusable 512-byte sector buffer in the same compiled SCSI subsystem as the register interface. Upon COMMAND entry the first accepted handshake supplies opcode; CDB dispatch waits for the full command. READ(6) loads requested sector into that buffer, and the original firmware consumes one byte per valid PIO/pseudo-DMA handshake; multi-sector operations refill and reuse it. One configured target ID suffices, while selection failure for other IDs remains real. Prior generic bus/framework and speculative command requirements reduced; original-ROM trace still determines additional needed commands. No code changes or approval.
 
+- **2026-11-18 — Decision / status change:** The user requested both implementations. Moved `OPEN` → `IN_PROGRESS` on `plus-emu-0004-0005-scsi` without rearranging the roadmap or changing the `.Sony` floppy path.
+- **2026-11-18 — Implementation:** [`scsi_disk.c`](../../../devel/umac/src/scsi_disk.c) decodes completed CDBs and reuses a single 512-byte buffer. [`scsi_image.c`](../../../devel/umac/src/scsi_image.c) validates regular files (1–2,097,152 sectors, the READ(6) LBA limit), reads/writes at the raw offsets, and syncs successful WRITE(6) commands before GOOD. No rollback of previously completed sectors is promised. MODE SENSE(6) supplies the write-protect bit and an optional block descriptor, not mode pages. The frontend mounts with `-s`, read-only by default; `-p` explicitly permits persistence and `-t` sets ID 0–6 (default 1). Paths aliasing emulator RAM, ROM input/output or floppy are rejected before writes to those files.
+- **2026-11-18 — Test:** Clean CMake build and [`umac_scsi_test disk`](../../../devel/umac/README.md#scsi-tests) passed. The test read LBA 100 over PIO, wrote LBA 98 over PIO and LBAs 100–101 over pseudo-DMA, closed/reopened and verified exact bytes in the file and through guest MMIO. LBA 99 stayed unchanged when reset interrupted the last ACK of its write. A count-zero read returned 256 blocks ending at the last block. Tests also exercised readiness, INQUIRY, sense consumption, write protection, bounds, invalid CDBs, truncated reads, write/sync errors, malformed media and a target with no medium. Offscreen SDL smoke also passed with `-d`/`-w` and `-s`/`-t`/`-p` on disposable copies; the original fixtures were not modified.
+- **2026-11-18 — Original firmware test:** The unmodified Plus V3 low-level SCSI Manager routines wrote and read back 512 bytes at LBA 100 after the raw image was closed and reopened read-only, with GOOD and COMMAND COMPLETE both times. See the Notes in [PLUS-EMU-0004](PLUS-EMU-0004.md) for the ROM hash and actual register trace. Only a generated, unpartitioned device image was used; full detection/mount/boot and physical BlueSCSI/M0001AP compatibility are **NOT TESTED**.
+- **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. The implementation and evidence are ready for review, not yet approved or resolved.
+
 **Proposed Change**
 
-**For review before implementation — one disk target, fixed sector buffer:**
+**Review candidate — one disk target, fixed sector buffer:**
 
 1. Agree the minimal completed-byte handshake and phase transition contract with `PLUS-EMU-0004`; retain a single transaction owner and configurable target ID 1, without an electrical bus simulator.
 2. Implement COMMAND-phase CDB collection (first-byte opcode → CDB length) and a 512-byte reusable buffer for READ(6) / WRITE(6); prove LBA 100 flow through CPU register accesses and status/message completion.
@@ -133,12 +139,13 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 
 **Rejected:** paravirtual disk calls, guest-RAM shortcuts, a simulated electrical SCSI bus, or a generic multi-device framework as an initial requirement. Those increase scope without improving the specified Plus firmware-visible behaviour.
 
-**Open verification:** actual SCSI Manager command sequence/driver page requests, precise not-ready/phase semantics inherited from `PLUS-EMU-0004`, and identification of lawful bootable whole-device test media.
+**Open verification:** obtain a lawful bootable whole-device image, capture any further commands/pages its driver needs, and verify mount/boot and physical BlueSCSI byte-for-byte interchange.
 
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `plus-emu-0004-0005-scsi` | `179b13a` | `UNREVIEWED` | Attach one sector-buffered SCSI disk with raw-image persistence, CLI options and read/write tests. |
 
 **Resolution Description**
 

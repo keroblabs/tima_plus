@@ -1,12 +1,12 @@
 # PLUS-EMU-0004 — Implement Macintosh Plus NCR 5380 SCSI controller
 
 **ID:** `PLUS-EMU-0004`  
-**Status:** `OPEN`  
+**Status:** `REVIEW`\
 **Title:** Implement Macintosh Plus NCR 5380 SCSI controller
 
 **Description**
 
-The current uMac reference does **not implement the Macintosh Plus NCR 5380 SCSI controller**. The emulator therefore cannot expose the actual SCSI registers, controller state or bus handshakes to the original M0001AP ROM and SCSI Manager. This is a **confirmed missing hardware capability** for our Macintosh Plus model, not a regression in the upstream minimalist uMac emulator.
+The inspected uMac baseline did **not implement the Macintosh Plus NCR 5380 SCSI controller**. It could not expose the actual SCSI registers, controller state or bus handshakes to the original M0001AP ROM and SCSI Manager. This was a **confirmed missing hardware capability** for our Macintosh Plus model, not a regression in the upstream minimalist uMac emulator.
 
 The goal is a **Macintosh Plus-specific, ROM-visible register-compatible initiator model**, not a full NCR 5380 or electrical SCSI bus simulator. Reproduce only the meaningful register operations, address decoding, arbitration/selection, protocol phases, CPU-polled I/O and pseudo-DMA that the genuine Plus ROM can observe. **There is no independent SCSI DMA controller or CPU-external SCSI IRQ/DRQ wiring on the M0001AP.** Both transfer paths are driven by MC68000 memory accesses. The SCSI disk target, persistent media image and BlueSCSI-compatible boot are explicitly separate work.
 
@@ -93,15 +93,15 @@ The source layout is deliberately flexible. A **single SCSI subsystem** with int
 
 ### Acceptance checks — firmware-visible compatibility
 
-- [ ] Clean build and unchanged patched-ROM floppy, display and input regression.
-- [ ] Macintosh Plus address tests cover regular A9=0 and pseudo-DMA A9=1, A4–A6 register index, A0 read/write convention, mirrors and access widths, including `0x580000`, `0x580001`, `0x580040`, `0x580200` and `0x580100` (A8-only negative check).
-- [ ] Eight 5380 read/write register views return verified masks, reset/side effects, status, arbitration and start-DMA semantics rather than passive storage.
-- [ ] Through guest-like register writes, one initiator acquires the free bus, selects attached target ID 1, and *fails/times out* selecting an absent ID; there is no invented SCSI ID enumeration register.
-- [ ] On COMMAND phase entry the target CDB counter resets to zero. Six **completed** REQ/ACK handshakes deliver exactly six CDB bytes; repeated output writes, current-data reads and polling do not append duplicate bytes.
-- [ ] PIO and A9-qualified pseudo-DMA support bidirectional bytes, correct phase/status/REQ/ACK/DRQ behaviour, last-byte advancement and not-ready errors with **exactly one** byte committed per valid completed transfer.
-- [ ] STATUS, MESSAGE IN, BUS FREE, SCSI reset and incomplete/invalid access sequences are guest-visible and deterministic; neither controller nor disk directly manipulates guest RAM.
-- [ ] No separate hardware DMA/IRQ, pin-level bus simulator, second initiator or mandatory general bus library is implemented.
-- [ ] Validate against an identified original Plus ROM/SCSI Manager access trace as soon as available. Record ROM hash, actual register sequence and deviations; mark unavailable original-ROM tests **NOT TESTED**.
+- [x] Clean build and unchanged patched-ROM floppy, display and input smoke test.
+- [x] Emulator address tests cover regular A9=0 and pseudo-DMA A9=1, A4–A6 register index, A0 read/write convention, mirrors and access widths, including `0x580000`, `0x580001`, `0x580040`, `0x580200` and `0x580100` (A8-only negative check). Physical alias and wide-access observations are **NOT TESTED**.
+- [x] Eight 5380 read/write views have initiator register masks, reset/side effects, status, arbitration and DMA-start semantics. Target-mode operations and parity fault injection are outside the model.
+- [x] Through guest-like register writes, one initiator acquires the free bus, selects attached target ID 1, and gets no BSY from an absent ID, leaving the guest to time out.
+- [x] On COMMAND phase entry the target CDB counter resets to zero. Six **completed** REQ/ACK handshakes deliver exactly six CDB bytes; repeated output writes, current-data reads and polling do not append duplicate bytes.
+- [x] PIO and A9-qualified pseudo-DMA transfer in both directions. Tests cover phase/status/REQ/ACK/DRQ, last-byte advancement, not-ready access and exactly one byte per valid transfer.
+- [x] STATUS, MESSAGE IN, BUS FREE, SCSI reset and incomplete/invalid access sequences are guest-visible and deterministic; neither controller nor disk directly manipulates guest RAM.
+- [x] No separate hardware DMA/IRQ, pin-level bus simulator, second initiator or mandatory general bus library is implemented.
+- [x] Identified original Plus V3 SCSI Manager routine trace, ROM hash and actual register sequence recorded below. Full unmodified-ROM SCSI boot is **NOT TESTED**.
 - [ ] Document tests, unsupported optional features, commits and explicit review before closing.
 
 ### Out of scope
@@ -133,9 +133,16 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 - **2026-11-18 — Scope reduction (user discussion):** Prior requirements were broader than needed for M0001AP. Reframed as firmware-visible NCR 5380 behaviour with a single logical transaction/phase owner rather than independent electrical signals or general SCSI bus machinery. SCSI IDs are selected/probed, not enumerated from a register; command byte 0 starts on entering COMMAND phase, and *only completed* REQ/ACK or pseudo-DMA transfer events advance CDB/data byte counters. Preserve accurate register status/reset/error semantics; target command decode and sector image I/O remain `PLUS-EMU-0005`. No implementation changes or approval.
 
+- **2026-11-18 — Decision / status change:** The user requested implementation of both tickets. Moved `OPEN` → `IN_PROGRESS` on dedicated branch `plus-emu-0004-0005-scsi` from `107e886`; preserved `main` and the floppy-first programme order.
+- **2026-11-18 — Implementation:** [`scsi5380.c`](../../../devel/umac/src/scsi5380.c) owns the phase and completes PIO on ACK deassertion or one CPU DACK access; it delegates command interpretation to the selected target. [`main.c`](../../../devel/umac/src/main.c) routes SCSI before dummy I/O. Aligned words perform one access (upper byte read, lower byte write); longs perform two word cycles. Wrong-lane and odd wide reads return zero without a side effect; corresponding writes are ignored. Machine/CPU controller reset drops a partial transfer without asserting SCSI RST; ICR RST also latches internal IRQ and resets target sense. Selection and byte readiness are event-driven, without a periodic tick or host sleep.
+- **2026-11-18 — Investigation / rework:** Cross-checked the register masks against the NCR manual and the [Plus V3 listing](https://www.bigmessowires.com/rom-adapter/plus-rom-listing.asm). The blind send routine polls DRQ after its final DACK write. Keep send DRQ for the empty output latch even once the target requests STATUS, but reject further sends on phase mismatch. Premature reads return the existing input latch and never stall or consume a byte. Lost arbitration stays clear in the single-initiator model; no external EOP or parity faults are generated. Disabling initiator signals in test/target mode discards a pending manual handshake.
+- **2026-11-18 — Test:** Clean CMake 3.28.3 build with GCC 13.3.0 and SDL 2.30.0; new SCSI modules passed strict compiler warnings. The [`umac_scsi_test controller` and `disk` cases](../../../devel/umac/README.md#scsi-tests) passed when run directly (the IDE CMake test adapter could not configure). Coverage includes a synthetic target, absent selection, register masks and mirrors, invalid widths/lanes, reset, interrupted handshakes and PIO/pseudo-DMA sector I/O. Offscreen SDL smoke with the patched ROM and local System 7.0 floppy matched the pre-change binary's sampled framebuffer hashes and key/mouse event response, both without a SCSI image and with a disposable SCSI image mounted. The source floppy SHA-256 remained `19819ffcd4d9d07cb9a0c68b4acf2993485cbc2182ea9f98e7d7a65179667d54`.
+- **2026-11-18 — Original SCSI Manager test:** `umac_scsi_test rom <Plus V3 ROM>` passed with unmodified checksum `4d1f8172`, SHA-256 `dd908e2b65772a6b1f0c859c24e9a0d3dcde17b1c6a24f4abd8955846d7895e7`. The test invokes the identified low-level routines under Musashi, not ROM startup. A debugger trace observed `R0=80, R2=01` and ICR polling for arbitration, then `R1=04, R3=00, R0=82, R1=0d, R2=00, R4=00, R1=05`, BSY polling and `R1=00`. Each CDB byte used R0 and `R1=01/11/00` with REQ polling. The write selected phase 0 and wrote DMA start R5; the read selected phase 1 and wrote DMA start R7. There were exactly 512 byte accesses to `0x580201` (blind write) and 512 to `0x580200` (polled read), followed by PIO STATUS `00`, MESSAGE IN `00` and BUS FREE. Full SCSI boot, physical aliases, not-ready electrical behaviour and timing are **NOT TESTED**.
+- **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. Implementation and test evidence are available for review; no independent approval or resolution has been recorded.
+
 **Proposed Change**
 
-**For triage and explicit approval — compact Macintosh Plus initiator emulation:**
+**Review candidate — compact Macintosh Plus initiator emulation:**
 
 1. Verify normal vs A9-qualified SCSI MMIO decoding, register selection and real Plus register read/write semantics with headless tests.
 2. Create one small logical SCSI phase/handshake owner with a minimal target byte interface; implement idle arbitration, valid ID selection/absent timeout, reset and visible status.
@@ -146,12 +153,13 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 **Alternative rejected:** patch Mac ROM SCSI calls or read/write guest RAM from host disk routines. This would not emulate the NCR 5380 register interface and would conceal compatibility defects.
 
-**Remaining verification:** precise mirrors/byte lanes, ROM's actual register sequences, timing and premature pseudo-DMA behaviour. Do not infer success from synthetic transfers alone.
+**Remaining verification:** validate the mirror and wider-access policy, premature pseudo-DMA and timing on physical hardware, and exercise an actual bootable device image through unmodified ROM startup. The routine-level V3 trace does not cover those conditions.
 
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `plus-emu-0004-0005-scsi` | `179b13a` | `UNREVIEWED` | Model 5380 initiator MMIO and handshakes; test controller and Plus V3 SCSI Manager I/O. |
 
 **Resolution Description**
 
