@@ -1,0 +1,8 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/umac",
+    "cmake.buildDirectory": "${workspaceFolder}/umac/build-cmake",
+    "cmake.outlineViewType": "tree",
+    "cmake.configureSettings": {
+        "MEMSIZE": "2048"
+    }
+}
