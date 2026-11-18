@@ -9,6 +9,8 @@ enum {
         WRITE_6 = 0x0a,
         INQUIRY = 0x12,
         MODE_SENSE_6 = 0x1a,
+        READ_10 = 0x28,
+        WRITE_10 = 0x2a,
 
         GOOD = 0x00,
         CHECK_CONDITION = 0x02,
@@ -62,6 +64,7 @@ static enum scsi_phase execute_command(struct scsi_disk *disk)
 {
         const uint8_t *cmd = disk->command;
         unsigned int lun = cmd[1] >> 5;
+        bool rw10 = cmd[0] == READ_10 || cmd[0] == WRITE_10;
 
         if (cmd[0] != REQUEST_SENSE)
                 disk->sense_key = disk->sense_asc = 0;
@@ -70,7 +73,9 @@ static enum scsi_phase execute_command(struct scsi_disk *disk)
         case TEST_UNIT_READY:
         case REQUEST_SENSE:
         case READ_6:
+        case READ_10:
         case WRITE_6:
+        case WRITE_10:
         case INQUIRY:
         case MODE_SENSE_6:
                 break;
@@ -80,7 +85,7 @@ static enum scsi_phase execute_command(struct scsi_disk *disk)
 
         if (lun && cmd[0] != INQUIRY)
                 return check_condition(disk, ILLEGAL_REQUEST, 0x25);  /* Unsupported LUN */
-        if (cmd[5])
+        if (cmd[rw10 ? 9 : 5])
                 return check_condition(disk, ILLEGAL_REQUEST, 0x24);  /* No linked commands */
 
         switch (cmd[0]) {
@@ -135,12 +140,22 @@ static enum scsi_phase execute_command(struct scsi_disk *disk)
                 return reply(disk, length);
         }
 
-        disk->lba = ((uint32_t)(cmd[1] & 0x1f) << 16) | (cmd[2] << 8) | cmd[3];
-        disk->blocks_left = cmd[4] ? cmd[4] : 256;
+        if (rw10) {
+                if ((cmd[1] & 0x1f) || cmd[6])
+                        return check_condition(disk, ILLEGAL_REQUEST, 0x24);
+                disk->lba = ((uint32_t)cmd[2] << 24) | ((uint32_t)cmd[3] << 16) |
+                            (cmd[4] << 8) | cmd[5];
+                disk->blocks_left = (cmd[7] << 8) | cmd[8];
+                if (!disk->blocks_left)
+                        return SCSI_STATUS;
+        } else {
+                disk->lba = ((uint32_t)(cmd[1] & 0x1f) << 16) | (cmd[2] << 8) | cmd[3];
+                disk->blocks_left = cmd[4] ? cmd[4] : 256;
+        }
         if (disk->lba >= disk->media.blocks || disk->blocks_left > disk->media.blocks - disk->lba)
                 return check_condition(disk, ILLEGAL_REQUEST, 0x21);  /* LBA out of range */
         disk->data_len = SCSI_SECTOR_SIZE;
-        if (cmd[0] == READ_6)
+        if (cmd[0] != WRITE_6 && cmd[0] != WRITE_10)
                 return read_sector(disk);
         if (!disk->media.write)
                 return check_condition(disk, DATA_PROTECT, 0x27);     /* Write protected */

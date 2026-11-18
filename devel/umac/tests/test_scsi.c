@@ -378,15 +378,22 @@ static void test_disk(void)
         wr(MODE, 0);
         finish(0);
 
+        const uint8_t write10[] = {0x2a, 0, 0, 0, 0, 102, 0, 0, 1, 0};
+        command(write10, sizeof(write10));
+        wr(TCR, SCSI_DATA_OUT);
+        for (unsigned int i = 0; i < SCSI_SECTOR_SIZE; ++i)
+                send_byte(pattern(102, i, true));
+        finish(0);
+
         ncr5380_attach(NULL);
         CHECK(scsi_image_close(&image) == 0);
         CHECK(scsi_image_open(&image, image_path, false) == 0);
         attach_disk(&disk, &image.media);
-        for (unsigned int lba = 97; lba < 103; ++lba) {
+        for (unsigned int lba = 97; lba < 104; ++lba) {
                 uint8_t sector[SCSI_SECTOR_SIZE];
                 CHECK(pread(image.fd, sector, sizeof(sector), lba * sizeof(sector)) == (ssize_t)sizeof(sector));
                 for (unsigned int i = 0; i < sizeof(sector); ++i)
-                        CHECK(sector[i] == pattern(lba, i, lba == 98 || lba == 100 || lba == 101));
+                        CHECK(sector[i] == pattern(lba, i, lba == 98 || (lba >= 100 && lba <= 102)));
         }
 
         /* Count 0 reads exactly 256 blocks, through the last block of the
@@ -397,15 +404,35 @@ static void test_disk(void)
         wr(CLEAR_IRQ, 0);
         for (unsigned int lba = IMAGE_BLOCKS - 256; lba < IMAGE_BLOCKS; ++lba)
                 for (unsigned int i = 0; i < SCSI_SECTOR_SIZE; ++i)
-                        CHECK(cpu_read_byte(DACK) == pattern(lba, i, lba == 98 || lba == 100 || lba == 101));
+                        CHECK(cpu_read_byte(DACK) == pattern(lba, i, lba == 98 || (lba >= 100 && lba <= 102)));
         wr(MODE, 0);
         finish(0);
+
+        uint8_t read10[] = {0x28, 0, 0, 0, (IMAGE_BLOCKS - 2) >> 8,
+                            (IMAGE_BLOCKS - 2) & 0xff, 0, 0, 2, 0};
+        command(read10, sizeof(read10));
+        wr(TCR, SCSI_DATA_IN);
+        for (unsigned int lba = IMAGE_BLOCKS - 2; lba < IMAGE_BLOCKS; ++lba)
+                for (unsigned int i = 0; i < SCSI_SECTOR_SIZE; ++i)
+                        CHECK(receive_byte() == pattern(lba, i, false));
+        finish(0);
+
+        read10[2] = 1;                   /* The LBA's high byte must not be truncated. */
+        command(read10, sizeof(read10));
+        finish(2);
+        read_sense(5, 0x21);
+        read10[8] = 0;
+        command(read10, sizeof(read10));
+        finish(0);                       /* A ten-byte CDB with count zero transfers nothing. */
 
         rw_command(0x08, IMAGE_BLOCKS - 1, 2);
         finish(2);
         read_sense(5, 0x21);
         read_sense(0, 0);
         rw_command(0x0a, 100, 1);
+        finish(2);
+        read_sense(7, 0x27);
+        command(write10, sizeof(write10));
         finish(2);
         read_sense(7, 0x27);
 
@@ -421,7 +448,7 @@ static void test_disk(void)
         CHECK(receive_byte() == 0 && receive_byte() == 0 && receive_byte() == 2 &&
               receive_byte() == 2 && receive_byte() == 31);
         finish(0);
-        const uint8_t unsupported[] = {0x28, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+        const uint8_t unsupported[] = {0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0};
         command(unsupported, sizeof(unsupported));
         finish(2);
         read_sense(5, 0x20);
@@ -505,6 +532,29 @@ static void test_disk_backend(void)
                 }
                 CHECK(next == SCSI_STATUS && target.peek(target.ctx, next) == 0);
         }
+}
+
+static void test_plus_rom_decode(void)
+{
+        uint8_t *ram = calloc(1, RAM_SIZE);
+        uint8_t *rom = calloc(1, ROM_SIZE);
+        disc_descr_t floppy[DISC_NUM_DRIVES] = {0};
+        CHECK(ram && rom);
+        memcpy(rom, "\x12\x34\x56\x78", 4);
+        rom[ROM_SIZE - 2] = 0x9a;
+        rom[ROM_SIZE - 1] = 0xbc;
+        CHECK(umac_init(ram, rom, floppy) == 0);
+
+        /* These are the two addresses the Plus ROM uses to detect SCSI. */
+        CHECK(cpu_read_long(0x420000) != cpu_read_long(0x440000));
+        CHECK(cpu_read_long(0x440000) == 0x12345678);
+        CHECK(cpu_read_byte(0x420000) == 0xff && cpu_read_word(0x420000) == 0xffff);
+        CHECK(cpu_read_long(0x41fffe) == 0x9abcffff);
+        CHECK(cpu_read_instr_word(0x440000) == 0x1234);
+        CHECK(cpu_read_instr_word(0x420000) == 0xffff);
+        CHECK(cpu_read_long(0) == 0x12345678 && cpu_read_long(0x020000) == 0xffffffffu);
+        free(rom);
+        free(ram);
 }
 
 static void test_floppy_presence(void)
@@ -620,9 +670,10 @@ static void test_original_rom(const char *rom_path)
 
 int main(int argc, char **argv)
 {
-        if (argc == 2 && !strcmp(argv[1], "controller"))
+        if (argc == 2 && !strcmp(argv[1], "controller")) {
                 test_controller();
-        else if (argc == 2 && !strcmp(argv[1], "disk")) {
+                test_plus_rom_decode();
+        } else if (argc == 2 && !strcmp(argv[1], "disk")) {
                 test_disk_backend();
                 test_disk();
                 test_floppy_presence();

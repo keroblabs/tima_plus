@@ -220,19 +220,23 @@ Attach a raw, whole-device image read-only with `-s`:
 The default is ID 1, LUN 0. Use `-t 0` through `-t 6` to override the
 target ID (the Mac is ID 7). The filename is not interpreted. Add `-p`
 to enable in-place writes; **use a copy of the image**. A successful
-WRITE(6) syncs the file before returning GOOD. This does not roll back
+WRITE(6) or WRITE(10) syncs the file before returning GOOD. This does not roll back
 sectors already written if a multiblock command is interrupted or fails.
 Do not modify the backing file from another process while it is mounted.
 
 Use a regular image file containing 1 to 2,097,152 512-byte sectors
-(up to 1 GiB). Block 0 is the first 512 bytes, with no header or
-conversion. A bootable Mac/BlueSCSI device image also needs a partition
-map, a suitable Macintosh disk driver and a bootable system. An HFS
-volume image alone is not a bootable SCSI device image.
+(up to 1 GiB). Block 0 is the first 512 bytes, with no emulator header
+or conversion. The Macintosh Plus ROM expects a driver descriptor at
+device block 0, a Plus-compatible disk driver and an Apple Partition Map.
+An HFS-only volume image, even with an `.hda` extension, will not mount
+by itself. Convert it to a whole-device image (for example with
+[Disk Jockey](https://diskjockey.onegeekarmy.eu/)) before attaching it.
+Booting from it also requires a bootable System volume.
 
 Supported commands are TEST UNIT READY, REQUEST SENSE, INQUIRY,
-READ(6)/WRITE(6) and MODE SENSE(6) for the current header/block descriptor
-(including the write-protect bit). Other commands return CHECK CONDITION.
+READ(6)/WRITE(6), READ(10)/WRITE(10) and MODE SENSE(6) for the current
+header/block descriptor (including the write-protect bit). Other commands
+return CHECK CONDITION.
 The controller supports polled REQ/ACK and CPU-driven pseudo-DMA without
 CPU interrupts or wait states. It has no target mode, contention,
 disconnect/reselect, MESSAGE OUT, parity faults or external DMA/EOP.

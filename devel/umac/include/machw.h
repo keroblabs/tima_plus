@@ -69,9 +69,10 @@ extern int overlay;
  *  - RAM is at 0-0x40_0000
  *  - manuals say 0x60_0000-0x80_00000 is "unassigned", but may as well make RAM here too
  *
- * i.e. RAM is 60-80, or !overlay and 0.  And ROM is 40-50, or overlay and 0.
+ * i.e. RAM is 60-80, or !overlay and 0.  The ROM select window is 40-50
+ * (or also at 0 during overlay); A17 separately controls ROM output.
  */
-#define IS_ROM(x)       (((ADR24(x) & 0xf00000) == ROM_ADDR) || (overlay && (ADR24(x) & 0xf00000) == 0))
+#define IS_ROM_WINDOW(x) (((ADR24(x) & 0xf00000) == ROM_ADDR) || (overlay && (ADR24(x) & 0xf00000) == 0))
 /* RAM: always at 0x600000-0x7fffff, sometimes at 0 (0 most likely so check first!) */
 #define IS_RAM(x)       ((!overlay && ((ADR24(x) & 0xc00000) == 0)) || ((ADR24(x) & 0xe00000) == RAM_HIGH_ADDR))
 
