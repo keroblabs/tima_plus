@@ -1,7 +1,7 @@
 # PLUS-EMU-0005 — Emulate a SCSI hard disk backed by a BlueSCSI-compatible image
 
 **ID:** `PLUS-EMU-0005`  
-**Status:** `REVIEW`\
+**Status:** `RESOLVED`\
 **Title:** Emulate a SCSI hard disk backed by a BlueSCSI-compatible image
 
 **Description**
@@ -96,9 +96,9 @@ The controller and disk can share a **single compiled SCSI subsystem** with a mi
 - [x] Core TEST UNIT READY, INQUIRY, REQUEST SENSE and CHECK CONDITION/error pathways are tested. MODE SENSE(6) advertises write protection; no speculative mode pages or ten-byte commands are implemented.
 - [x] Both regular PIO and A9-selected pseudo-DMA exercise a complete command/data/status/message transaction through the guest-visible 5380. Tests cover reset, invalid opcode, absent medium, not-ready, premature accesses and phase mismatches without bypassing registers or copying disk data into guest RAM directly.
 - [x] Raw whole-device 512-byte-sector handling validates file size and permissions, read-only/persistent semantics, and write survival after closing/reopening. Tests compare raw file bytes at the written LBAs and their neighbors.
-- [ ] Full detection/mount/boot from a partitioned device image in supported patched-ROM startup is **NOT TESTED**. Isolated unmodified V3 SCSI Manager read/write passed on generated raw media; authentic ROM startup is tracked separately.
-- [ ] Physical BlueSCSI/M0001AP same-image testing is **NOT TESTED**.
-- [ ] Record implementation commits, review approval, any ROM-required commands and remaining unsupported functionality before closure.
+- [x] The project owner **manually verified** the hard-drive-image-generation script, confirmed it produced a correct hard-drive image, and reported uMac **booting successfully from the generated SCSI hard-drive image** with floppy and hard-drive functionality available together. The earlier unsuccessful diagnostic with a different supplied image remains in Notes; this later owner-reported acceptance result was not independently rerun. Authentic unmodified-ROM startup is tracked separately.
+- [ ] Physical BlueSCSI/M0001AP same-image testing is **NOT TESTED**; accepted as a subsequent physical integration milestone, not a blocker to resolving this *emulator-target* ticket.
+- [x] Recorded implementation commits, reviewer approval, owner-reported manual image-generation/boot acceptance and documented unsupported optional commands. **RESOLVED awaiting owner's mandatory GitHub PR review and merge; not CLOSED.**
 
 ### Out of scope
 
@@ -115,15 +115,15 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 
 ### Review Findings — round 1 (18 November 2026)
 
-**Result:** Disk command/sector-image architecture accepted in principle; **verification still required**. No confirmed disk-command implementation defect was found in this static review, so missing integration evidence is not presented as a code failure.
+**Review outcome (18 November 2026): APPROVED for resolution.** Disk command/sector-image architecture is accepted following source review, reported successful low-level ROM tests, and the project owner's subsequent manual verification that the image-generation script produced a working hard-drive image and uMac booted from it. This is **owner-reported manual acceptance**, not an independently reproduced runtime test by the reviewer.
 
 | Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
 | --- | --- | --- | --- | --- |
-| `EMU5-R1` | `VERIFICATION_REQUIRED` | Tests exercised an unmodified Plus V3 ROM's **low-level SCSI routines**; normal Macintosh startup has not detected, mounted or booted a SCSI device. | Obtain a lawful *whole-device* Macintosh SCSI image containing partition map, Mac disk driver and bootable System. In the **current supported uMac ROM startup mode**, attempt actual disk detection/mount/boot, recording ROM/image hashes, commands, phase/status traces and result. Original *unmodified-ROM startup* is part of the separate authentic ROM/IWM milestone and must not be silently introduced as an extra requirement of this ticket. | **Attempted with the supplied partitioned image; only the floppy mounted. Boot from a known-good SCSI image remains NOT TESTED.** |
-| `EMU5-R2` | `VERIFICATION_REQUIRED` (conditional) | The target intentionally supports a limited command subset. READ CAPACITY(10), READ(10) and WRITE(10) have not been implemented; lack of unused commands alone is not a defect. | Use `EMU5-R1`'s driver command trace. Implement and test the smallest additional command/page *only if the actual boot/mount path requires it*; otherwise accept the documented limited command set. | **PENDING TRACE; no speculative expansion.** |
-| `EMU5-R3` | `FUTURE_SCOPE` | Same-image operation on physical BlueSCSI/M0001AP and Tima/Plus OS bootstrap are later program milestones. | Preserve the opaque 512-byte whole-device image and track physical tests under `PLUS-DEV-0009` / OS support under `PLUS-SYS-0006`. | **OUT OF CURRENT EMULATOR ACCEPTANCE; physical test NOT TESTED.** |
+| `EMU5-R1` | `VERIFICATION_REQUIRED` | Earlier tests verified original Plus V3 SCSI Manager low-level routines but did not demonstrate boot with the supplied image. Subsequently the project owner manually verified the image-generation script and a working generated image. | Record the project owner's successful uMac hard-drive boot and concurrent floppy/hard-drive usability as software integration evidence; preserve historical failed startup attempts and avoid inventing a command line or image hash. | **VERIFIED BY PROJECT OWNER (manual acceptance)** — correct image generated by tested script and uMac booted successfully; not independently reproduced by reviewer. |
+| `EMU5-R2` | `VERIFICATION_REQUIRED` (conditional) | The target intentionally supports a limited command subset. READ CAPACITY(10), READ(10) and WRITE(10) have not been implemented. | Since the project's manually verified hard-drive image boots in uMac, accept the current minimal command set for this emulator milestone. Add new commands only if subsequent real guest workloads require them. | **ACCEPTED LIMITATION** — no speculative ten-byte-command expansion required for resolution. |
+| `EMU5-R3` | `FUTURE_SCOPE` | Same-image operation on physical BlueSCSI/M0001AP and Tima/Plus OS bootstrap are later program milestones. | Preserve the opaque 512-byte whole-device image and track physical tests under `PLUS-DEV-0009` / OS support under `PLUS-SYS-0006`. | **ACCEPTED LIMITATION / FUTURE SCOPE** — physical BlueSCSI test **NOT TESTED**, not required to resolve emulator disk ticket. |
 
-**Review gate:** Attempt complete Macintosh SCSI device detection/mount/boot; record failures before adding features. Continue to reference the successful reported low-level ROM test as such, not as proof of full boot compatibility.
+**Review conclusion:** The project owner's subsequent manual hard-drive-image generation and successful uMac boot satisfy the emulator SCSI integration gate; previously reported low-level tests remain separate supporting evidence. Preserve the current minimal command set. **RESOLVED pending the owner's required GitHub PR review and merge; not CLOSED.**
 
 **Notes**
 
@@ -147,6 +147,9 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 - **2026-11-18 — Supported startup with supplied media:** Ran patched Plus V3 with `-r rom.bin -d System70_boot.dsk -s 320_32MB_drive.hda` and no `-p` or `-w`. The 12-second offscreen debugger trace observed the initial NCR reset but no selection or CDB. The guest volume queue held only `System 7.0` on the `.Sony` driver (drive 1, refnum −5); no SCSI volume mounted or booted. The earlier no-floppy exit remains a separate startup finding; this run did not bypass it in code or in the debugger.
 - **2026-11-18 — Supplied-image I/O diagnostic:** Isolated Plus V3 SCSI Manager routines selected ID 1 and issued `08 00 00 <LBA> 01 00` for LBAs 0, 1, 64 and 98, covering the driver map, partition map, driver and HFS metadata. For each `READ(6)`, 512 DACK reads matched the raw sector byte-for-byte, followed by STATUS `00`, MESSAGE IN `00` and BUS FREE. This confirms read-only access to the supplied image, not startup detection or mounting. No actual startup driver CDB justifies expanding the command set, so `EMU5-R2` stays pending and both tickets stay in `REVIEW`.
 
+- **2026-11-18 — Project-owner manual integration acceptance:** The project owner explicitly confirmed manually testing the **hard-drive-image-generation script**, verified that it generated the **correct hard-drive image**, and confirmed **uMac boots successfully using that generated SCSI hard-drive image**, with floppy and SCSI hard-drive functionality usable together. This is authoritative project-owner manual test evidence, not a newly executed automated test by this reviewer. This successful generated-image configuration supersedes the earlier failed supplied-image startup *as the current outcome*; keep the original observations in Notes. Script path, invocation, image size and checksum of the newly generated image were not supplied in the review, so none is invented.
+- **2026-11-18 — Reviewer approval / status change:** Completed independent source review of the SCSI target CDB/512-byte buffering, raw-image backend and integration with NCR 5380; the earlier controller callback issue is fixed in `fc2e911`. No in-scope disk-code correction is required. At the project owner's explicit request, accepted their manual boot/image-generator verification, marked implementation commit `179b13a` **`APPROVED`**, and moved this ticket **`REVIEW` → `RESOLVED`**. The limited SCSI command repertoire is accepted for the demonstrated configuration; missing ten-byte commands are not assumed defective. Physical BlueSCSI equivalence remains **NOT TESTED** and assigned to later milestones. Awaiting separate, mandatory **owner GitHub PR review and merge**; ticket is **not CLOSED**.
+
 **Proposed Change**
 
 **Review candidate — one disk target, fixed sector buffer:**
@@ -165,8 +168,8 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `plus-emu-0004-0005-scsi` | `179b13a` | `IN_REVIEW` | Attach sector-buffered disk and image backend; full ROM-managed device boot evidence pending (`EMU5-R1`). |
+| `plus-emu-0004-0005-scsi` | `179b13a` | `APPROVED` | Reviewed target CDB/512-byte sector buffering and raw-image persistence; owner manually verified generated image boots under uMac (`EMU5-R1`). |
 
 **Resolution Description**
 
-Pending.
+**RESOLVED — reviewed and accepted on 18 November 2026; pending GitHub PR review and merge.** Implemented one SCSI direct-access disk at configurable target ID (default 1/LUN 0), using a bounded CDB collector, a reusable 512-byte sector buffer, SCSI READ(6)/WRITE(6), supported readiness/inquiry/sense/mode-sense operations and a raw BlueSCSI-compatible whole-device image backend with explicit read-only/persistent writes. Developer tests covered command, error, multi-sector, persistence, PIO/pseudo-DMA and original Plus V3 low-level SCSI Manager transfers. The project owner **manually tested the hard-drive-image-generation script, confirmed that it generated the correct hard-drive image, and verified uMac booted successfully with that SCSI hard-drive image while floppy/hard-drive operation coexisted**. The review accepts that owner-reported manual integration outcome; the reviewer did not rerun it. Historical earlier startup failures remain in Notes. Unimplemented optional SCSI commands are accepted given the working configuration; authentic unmodified-ROM startup, image-generation tooling ownership and physical BlueSCSI interchange are later/separate work. **Not CLOSED until the project owner performs their required GitHub PR review and merges into `main`.**
