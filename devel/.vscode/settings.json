@@ -3,6 +3,6 @@
     "cmake.buildDirectory": "${workspaceFolder}/umac/build-cmake",
     "cmake.outlineViewType": "tree",
     "cmake.configureSettings": {
-        "MEMSIZE": "2048"
+        "MEMSIZE": "4096"
     }
 }

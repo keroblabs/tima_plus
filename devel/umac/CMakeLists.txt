@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 set(PROJECT_NAME umac)
 project(${PROJECT_NAME} LANGUAGES C)
 
-set(MEMSIZE "1024" CACHE STRING "Emulated RAM size in KiB")
+set(MEMSIZE "4096" CACHE STRING "Emulated RAM size in KiB")
 set(DISP_WIDTH "512" CACHE STRING "Display width in pixels")
 set(DISP_HEIGHT "342" CACHE STRING "Display height in pixels")
 
