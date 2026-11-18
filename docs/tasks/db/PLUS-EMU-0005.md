@@ -8,7 +8,7 @@
 
 The Macintosh Plus emulator needs a **real SCSI target device model attached to its emulated SCSI bus**, not merely the NCR 5380 host controller. The present uMac has no SCSI disk target, and its `devel/umac/src/disc.c` is a ROM-patched/paravirtual **floppy** driver that bypasses SCSI hardware and must not be reused as a SCSI command shortcut.
 
-Implement a deterministic, testable **direct-access SCSI hard disk** that is selectable through `PLUS-EMU-0004`'s NCR 5380 controller, accepts SCSI commands and reads/writes a **complete block-device image**. The target must be able to mount the *same byte-for-byte disk image* intended to be used later on the physical M0001AP through BlueSCSI, without requiring an emulator-specific filesystem or ROM patch.
+Implement a **lightweight direct-access SCSI target** attached behind `PLUS-EMU-0004`'s register-visible controller. Decode a completed command, read one sector from the image into a reusable **512-byte buffer**, and allow firmware to consume it **one byte per completed handshake** (or reverse the flow for a write). No dedicated bus/wire simulation or multiple-target framework is needed. The target must be able to mount the *same byte-for-byte disk image* intended to be used later on the physical M0001AP through BlueSCSI, without requiring an emulator-specific filesystem or ROM patch.
 
 **Details**
 
@@ -20,49 +20,54 @@ Implement a deterministic, testable **direct-access SCSI hard disk** that is sel
 - **Related, outside scope:** `PLUS-SYS-0006` (Tima/Plus SCSI boot/driver and image preparation), plus ROM/IWM authenticity milestones. Keep the established **floppy-first** roadmap sequencing; opening this ticket does not itself approve or prioritize implementation.
 - **Inspected baseline:** `keroblabs/tima_plus`, `main`, 18 November 2026, static inspection. `devel/umac/src/unix_main.c` accepts `-d` for a floppy image and `-w` for that floppy's persistent writes; `devel/umac/src/disc.c` / `include/disc.h` implement a paravirtual .Sony path. No emulated SCSI hard-disk command target or SCSI-disk image mount exists. No runtime tests performed for this ticket.
 
-### Architecture — the target is separate from the controller and host filesystem
+### Architecture — the minimal command-and-sector model
 
 ```text
- MC68000 -> Plus MMIO decoder -> NCR 5380 initiator [PLUS-EMU-0004]
-                                      |
-                            virtual SCSI bus
-                         (selection, REQ/ACK,
-                          phases, status, msg)
-                                      |
-                              SCSI target ID 1
-                        [PLUS-EMU-0005: disk]
-                         | command / sense |
-                         | block interface |
-                                      |
-                          raw device image file
-                          e.g. HD10_512.hda
+ MC68000 -> Mac Plus address decoder -> NCR 5380 register interface (EMU-0004)
+                                            |
+                                    shared SCSI state
+                                 phase + REQ/ACK owner
+                                            |
+                                   one hard-disk target
+                                    SCSI ID 1 / LUN 0
+                                  CDB + sector[512]
+                                            |
+                                    raw image backend
+                                    HD10_512.hda
 ```
 
-- Define or consume a clear **SCSI target-facing bus contract** in concert with `PLUS-EMU-0004`. The controller owns *Mac CPU register and A9-selected pseudo-DMA access*; the bus mediates selection, phases and REQ/ACK; the target owns SCSI command interpretation, device status/sense and block I/O. Name the owner of each transition to avoid double handshakes.
-- A target must be reached **only** by guest-originating SCSI bus transactions, never by a direct 68K trap, ROM hook, memory-to-disk copy, or special-case synthetic success in the 5380 controller.
-- The target has **no direct access to guest RAM**, CPU address space, CAS PAL or NCR registers. No host DMA or separate Apple SCSI interrupt is required. Device transfers move bytes through the controller's CPU-driven PIO/pseudo-DMA paths.
-- Start with **one attached hard disk**, default **SCSI ID 1 / LUN 0**; host initiator is normally ID 7. Provide a documented configuration path for valid target IDs (0–6), with explicit rejection of duplicate/out-of-range IDs. Keep the bus/target interface extensible for further IDs later; multiple simultaneous drives are **not required for initial acceptance**.
-- Use deterministic emulator time and controllable, bounded command/phase state. Do not depend on wall-clock sleeps for emulated status/handshake completion.
+This is **one lightweight SCSI subsystem**, possibly one compiled module, with **two logical responsibilities**: NCR firmware-facing registers/handshakes (`PLUS-EMU-0004`), and target CDB decoding, status/sense and image I/O (this ticket). No separate `scsi_bus.c`, physical signal simulation, disk-driver firmware or generic device framework is mandatory.
 
-### SCSI direct-access device behaviour
+- The Macintosh normally acts as initiator ID 7. **Keep one configurable disk target**, default ID 1/LUN 0. On a valid selection of ID 1, the target responds with BSY; other IDs remain absent so the guest's probing/timeout works. There is **no SCSI device-list register** to implement.
+- On selection, transition to **COMMAND** and set `command_pos = 0`. Each *completed* REQ/ACK byte transfer appends one command byte. The **first** byte is identified by COMMAND state plus position zero; its opcode determines the CDB length (e.g. READ(6) = 6 bytes). Only dispatch when all CDB bytes have been accepted, not when firmware merely writes the NCR output register.
+- The target's internal operations must not access guest RAM, CPU address space, NCR registers, PAL state or ROM traps. For DATA IN and DATA OUT, advance sector byte position **only when the controller reports a completed valid PIO/pseudo-DMA handshake**; register polling/observation never consumes data. One shared phase owner prevents duplicate advancement.
+- Ordinary bytes may become logically ready immediately; any guest-visible not-ready state, reset, selection timeout or error must remain deterministic. Do not introduce host sleeps or an idealised hardware DRQ stall absent on the real Plus.
 
-- Parse **6-byte and 10-byte Command Descriptor Blocks** (CDBs), decode LUN where applicable, maintain command context, and return correct **DATA IN / DATA OUT / STATUS / MESSAGE IN** phases and completion (including COMMAND COMPLETE); handle bus reset, aborted/incomplete command and selection/disconnection as supported by the agreed bus model.
-- Minimum commands for a useful disk model, with exact response fields, lengths and completion semantics tested:
+### Concrete example — READ(6), LBA 100, one sector
 
-| Opcode | Command | Required target behaviour |
-| --- | --- | --- |
-| `0x00` | TEST UNIT READY | Ready vs missing/unavailable medium status. |
-| `0x03` | REQUEST SENSE | Return meaningful sense key/ASC/ASCQ for previous CHECK CONDITION; verify clearing rules. |
-| `0x12` | INQUIRY | Direct-access fixed disk identity; consistent vendor/product/revision, standard response and allocation lengths. |
-| `0x08` / `0x0A` | READ(6) / WRITE(6) | Byte-accurate 512-byte sectors, 21-bit READ(6) LBA, transfer-length 0 meaning 256 blocks. |
-| `0x25` | READ CAPACITY(10) | Big-endian **last valid LBA** and logical block length (512), not total sector count. |
-| `0x28` / `0x2A` | READ(10) / WRITE(10) | LBA and transfer lengths, including 0 length meaning no blocks; multi-sector transfers and bounds. |
-| `0x1A` | MODE SENSE(6) | Initial compatible subset of mode pages/geometry and write-protect indication; unsupported page handling must return CHECK CONDITION with sense. |
+1. Firmware selects target ID 1 and sends six COMMAND-phase bytes `08 00 00 64 01 00`, each accepted through REQ/ACK.
+2. After the sixth byte, the disk decodes READ(6), LBA `100`, block count `1`, checks capacity, and reads 512 bytes at image offset `100 * 512` into `uint8_t sector[512]`. Report CHECK CONDITION / sense on bounds or I/O failure.
+3. Enter DATA IN; each **valid CPU byte transfer** returns `sector[data_pos]`, incrementing `data_pos` **once**. 512 transfers produce exactly the 512 bytes; repeated status/data-bus observations do not advance.
+4. When byte 511 has been acknowledged, return GOOD status (`0x00`), COMMAND COMPLETE message (`0x00`), then BUS FREE.
+5. For multiple blocks, load the next 512-byte sector into the **same buffer** after the previous sector's last byte. A READ(6) transfer count of **zero means 256 blocks**. No full-image or whole-command allocation.
+6. For WRITE(6), receive bytes into the same fixed buffer, write one sector after its final byte, then continue as needed. Report read-only and host errors accurately; no silent loss of data.
 
-- Investigate legacy Macintosh driver requirements before promoting optional commands to mandatory: `MODE SELECT(6)`, `START STOP UNIT`, `REZERO UNIT`, `SEEK(6)`, `FORMAT UNIT` and additional mode pages. Unsupported opcodes/fields **must not** silently report GOOD; return meaningful CHECK CONDITION / ILLEGAL REQUEST or an appropriate protocol error. Do not claim complete SCSI-1/SCSI-2 conformance.
-- Implement status/sense lifecycle: GOOD and CHECK CONDITION, not-ready and no-medium, illegal opcode/field, invalid LBA, write-protected medium and failed/short host I/O. Handle REQUEST SENSE following an error, reset and optional UNIT ATTENTION behaviour compatibly with observed Macintosh driver use.
-- Validate image bounds and integer overflow before accessing storage. Correctly process multi-block transfers without requiring a full-disk RAM allocation; preserve in-order block contents and explicit end-of-transfer handling.
-- **No fake SCSI device identity solely to satisfy a particular ROM**: configuration may choose a compatibility profile, but record what bytes and quirks are guest-visible and why.
+### Minimal command support — staged by real ROM need
+
+SCSI commands are decoded in the **target**, never in the NCR 5380 module. Prefer **six-byte CDB commands first** and add ten-byte CDBs as the original ROM/driver trace or later requirements demonstrate. Recognise group-dependent CDB lengths safely; unsupported/reserved opcodes do not silently succeed.
+
+| Command | Initial importance |
+| --- | --- |
+| `TEST UNIT READY (0x00)` | Core readiness/no-medium. |
+| `REQUEST SENSE (0x03)` | Core error reporting after CHECK CONDITION. |
+| `READ(6) (0x08)` | Core buffered 512-byte sectors, multiblock/count-0=256. |
+| `WRITE(6) (0x0A)` | Core inverse byte flow and persistent image writes. |
+| `INQUIRY (0x12)` | Core direct-access device identity/length. |
+| `MODE SENSE(6) (0x1A)` | Add required pages when traced/needed for ROM boot. |
+| `READ CAPACITY(10) (0x25)` | Add when traced/needed; report **last valid LBA**, not block count. |
+| `READ(10)/WRITE(10) (0x28/0x2A)` | Add when traced/needed; zero block count means no transfer. |
+
+Other opcodes including MODE SELECT, START STOP, SEEK, REZERO and FORMAT UNIT need not be implemented before evidence; unsupported commands return CHECK CONDITION and meaningful sense instead of GOOD. The initial subset is **not** a claim of complete SCSI-1/SCSI-2 compliance. Implement correct STATUS, MESSAGE IN / COMMAND COMPLETE, reset/abort, bounds, readonly, failed I/O and sense lifecycle for commands actually supported. **A working READ(6) unit test alone is not evidence that the original Macintosh can boot.**
 
 ### Backing image and BlueSCSI interoperability
 
@@ -73,32 +78,31 @@ Implement a deterministic, testable **direct-access SCSI hard disk** that is sel
 - **Writable persistence** should be explicit, with a read-only mode that correctly advertises and enforces data protection. Writes committed by a successful command must survive emulator shutdown/restart, with deterministic flush/close and host I/O failure propagation; no silent discard or immutable MAP_PRIVATE masquerading as writable storage. Make backup/copy use for integration tests clear.
 - An image-construction/partition/driver tool is **outside this target's scope** and belongs with `PLUS-SYS-0006` / separate approved tooling; the target must faithfully consume such images regardless of creator.
 
-### Integration / candidate module boundaries (not fixed API)
+### Integration boundary — compact source, complete observable behaviour
 
-- `devel/umac/include/scsi_disk.h`, `devel/umac/src/scsi_disk.c`: per-target state, command decode, sense/status and block translation.
-- `devel/umac/include/scsi_block.h` (and optional source): host-independent block backend operations such as read/write blocks, flush, capacity and readonly; inject a memory-backed fake in tests.
-- `devel/umac/src/unix_main.c`: mount/unmount, explicit separate SCSI image path, ID and persistence options. Keep existing `-d` and `-w` floppy behaviour intact.
-- `devel/umac/src/scsi_bus.*` / `scsi5380.*` from `PLUS-EMU-0004`: attach the disk as a target and perform real bus-phase transactions.
-- `devel/umac/CMakeLists.txt` and `devel/umac/tests/`: build wiring and deterministic headless command/protocol/image tests.
+The controller and disk can share a **single compiled SCSI subsystem** with a minimal internal transaction/byte interface; use separate `scsi_disk.c` or block helper only if it improves readability/testing. Do not create standalone physical bus/signal libraries just to mirror chips. Keep the existing `devel/umac/src/disc.c`/.Sony paravirtual floppy path unchanged.
 
-Avoid coupling target code to SDL, Unix-only syscalls, `disc_pv_hook()`, `.Sony` ROM replacement or a specific host mapping style. A memory-backed block backend plus a Unix file backend is sufficient initially. Preserve a portable integration boundary for other emulated hosts.
+- Host-side `unix_main.c` attaches a separate SCSI image (path, target ID, read-only/persistent option); leave existing `-d`/`-w` floppy flags alone.
+- A small block I/O helper exposes read-sector, write-sector, capacity and flush; unit tests can substitute a memory-backed image. All SCSI opcode/sector handling stays on the target side, not in NCR register callbacks.
+- Headless tests exercise the target alone **and** through NCR guest-visible MMIO; preserve existing ROM/floppy regression tests.
 
-### Acceptance checks — evidence required
+### Acceptance checks — staged, not full bus conformance
 
-- [ ] Clean uMac build plus existing patched-ROM/floppy display/input regressions; existing `-d` / `-w` behaviour unchanged.
-- [ ] Target can be mounted/configured at ID 1/LUN 0 by default, selected by the NCR 5380 bus model, and accessed solely through guest register/PIO/pseudo-DMA transactions; no paravirtual shortcut.
-- [ ] Headless unit tests verify command CDB decoding, INQUIRY fields, TEST UNIT READY, REQUEST SENSE, MODE SENSE subset, READ CAPACITY and READ/WRITE(6)/(10) transfer lengths, data phases, status and command-complete message.
-- [ ] An initialized test image proves precise sector 0, first/middle/last LBA, partial command, multiple-block transfers, endianness and out-of-bounds handling; zero-length and edge-length semantics independently checked.
-- [ ] Real file-backed read/write persistence confirmed by **close, reopen and byte-for-byte comparison**; read-only mode prevents mutation and reports SCSI data-protect sense; malformed/absent/unwritable image errors never cause false success or out-of-bounds reads.
-- [ ] With an emulator-target image mounted as `HD10_512.hda` (or equivalent explicit path/ID mapping), block 0 and representative further sectors equal their source bytes, and the resulting image remains **byte-for-byte valid for BlueSCSI media mounting**. Do not mistake naming alone for successful hardware boot.
-- [ ] Integration tests exercise selection failure/absent target, reset during command, missing/short data, error sense then REQUEST SENSE, unsupported opcode, bus-phase mismatch and interrupted/mid-transfer operations with deterministic results.
-- [ ] With a **legally obtained complete Macintosh SCSI device image**, an identified original Macintosh Plus ROM/SCSI Manager can detect/mount the drive and, where image/driver/System setup allows, boot from it. Record ROM revision/hash, image type/hash, observed behaviour and limitations. Mark **NOT TESTED** if required media are unavailable; do not claim boot success from synthetic block tests alone.
-- [ ] Check that the same unmodified image can be put on a BlueSCSI SD card and recognized by a physical Macintosh Plus in a separate hardware validation, when available; if not performed, clearly mark it **NOT TESTED** rather than asserting physical boot compatibility.
-- [ ] Implementation commits, tests, review/approval and exact remaining compatibility gaps are documented in this ticket before closure.
+- [ ] Build and existing patched-ROM floppy/display/input smoke tests pass; no change in existing `-d` / `-w` behaviour.
+- [ ] One configured disk at target ID 1/LUN 0 responds to a valid selection; absent IDs do not respond. No invented ID discovery register or multiple-target engine.
+- [ ] COMMAND entry resets CDB position. Only six completed REQ/ACK handshakes deliver six READ(6) bytes; duplicate output-register writes or polling do not append bytes.
+- [ ] CDB `08 00 00 64 01 00` loads exactly 512 bytes from image LBA 100 / offset `100 * 512`; 512 valid guest CPU reads return exactly those bytes, then GOOD → COMMAND COMPLETE → BUS FREE. Raw status/data observation never advances the buffer.
+- [ ] WRITE(6) receives and commits exactly 512 bytes, including write protection and host errors; multiblock read/write reuse the same 512-byte buffer, count 0 means 256 blocks, and bounds/last-block handling are verified.
+- [ ] Core TEST UNIT READY, INQUIRY, REQUEST SENSE and CHECK CONDITION/error pathways are tested; required extra commands/pages are added in response to an original-ROM/driver trace rather than broad speculative coverage.
+- [ ] Both regular PIO and A9-selected pseudo-DMA exercise a complete command/data/status/message transaction through the guest-visible 5380. Test reset, invalid opcode, absent medium, not-ready, premature accesses and phase mismatches; never bypass registers or copy disk data into guest RAM directly.
+- [ ] Raw whole-device 512-byte-sector image handling validates file size and permissions, read-only/persistent semantics, and write survival after emulator shutdown/reopen. BlueSCSI image compatibility is byte-for-byte, not only filename-compatible.
+- [ ] With legal original Mac Plus ROM, disk driver/partition/System image when available, document detection/mount/boot results and ROM/image hashes, or explicitly mark original-ROM testing **NOT TESTED**.
+- [ ] Physical BlueSCSI/M0001AP same-image testing is separate; mark **NOT TESTED** if unavailable.
+- [ ] Record implementation commits, review approval, any ROM-required commands and remaining unsupported functionality before closure.
 
 ### Out of scope
 
-Do **not** build a second NCR 5380, a CPU/DMA engine, physical BlueSCSI firmware, host filesystem shortcut, generic SCSI controller simulator, a SCSI CD-ROM/tape target, a Mac partition-map/HFS editor, copyrighted ROMs/drivers/System Software, or the Tima/Plus SCSI driver/bootstrap. The hard disk is a **target device connected to the controller**; its disk image is an opaque backing block store.
+Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/target manager, CPU/DMA engine, physical BlueSCSI firmware, host filesystem shortcut, generic SCSI controller/device simulator, a SCSI CD-ROM/tape target, a Mac partition-map/HFS editor, copyrighted ROMs/drivers/System Software, or the Tima/Plus SCSI driver/bootstrap. The hard disk is a **target device connected to the controller**; its disk image is an opaque backing block store.
 
 ### References
 
@@ -114,20 +118,22 @@ Do **not** build a second NCR 5380, a CPU/DMA engine, physical BlueSCSI firmware
 - **2026-11-18 — Scope decision:** Following the NCR 5380 address-selected pseudo-DMA discussion, the user identified the missing **actual disk**: add an emulated SCSI hard disk connected to the emulator's SCSI bus. Use the preallocated `PLUS-EMU-0005` ID and keep `PLUS-EMU-0004` host-controller-only. Specify a whole-device BlueSCSI-compatible image so the later hardware can use the same bytes.
 - **2026-11-18 — Investigation:** Static inspection finds the existing uMac disk implementation is the patched `.Sony` floppy paravirtual interface, not a SCSI target. Checked BlueSCSI documentation for ID/LUN filename convention and Macintosh whole-device image requirements. No implementation, build or end-to-end original-ROM test was performed.
 
+
+- **2026-11-18 — Scope reduction (user discussion):** The disk can be a compact command decoder + one reusable 512-byte sector buffer in the same compiled SCSI subsystem as the register interface. Upon COMMAND entry the first accepted handshake supplies opcode; CDB dispatch waits for the full command. READ(6) loads requested sector into that buffer, and the original firmware consumes one byte per valid PIO/pseudo-DMA handshake; multi-sector operations refill and reuse it. One configured target ID suffices, while selection failure for other IDs remains real. Prior generic bus/framework and speculative command requirements reduced; original-ROM trace still determines additional needed commands. No code changes or approval.
+
 **Proposed Change**
 
-**For review/approval before implementation:**
+**For review before implementation — one disk target, fixed sector buffer:**
 
-1. Agree a minimal initiator–bus–target contract jointly with `PLUS-EMU-0004`, including target ID, phase ownership, command/data/status/message lifetime and reset.
-2. Implement a standalone SCSI fixed-disk target using a memory-backed block backend and tests for required 6/10-byte CDB commands, errors, sense, multi-sector transfer and read-only semantics.
-3. Implement file-backed opaque 512-byte whole-device image mounting with explicit persistence, bounds and error reporting; keep its CLI options separate from current paravirtual floppy parameters.
-4. Attach the target at configurable ID (default 1) to the bus; test *through guest-visible NCR 5380 registers and pseudo-DMA/PIO*, not by invoking target CDB entrypoints only.
-5. Validate byte-for-byte BlueSCSI image interoperability and, when lawful original ROM/media are available, boot/mount behaviour through the original Macintosh Plus SCSI Manager. Record any additional command/quirk requirements observed, and only extend the supported command subset deliberately.
-6. Review results against the acceptance list and retain `PLUS-SYS-0006` for creating/installing Tima/Plus images, drivers and boot logic.
+1. Agree the minimal completed-byte handshake and phase transition contract with `PLUS-EMU-0004`; retain a single transaction owner and configurable target ID 1, without an electrical bus simulator.
+2. Implement COMMAND-phase CDB collection (first-byte opcode → CDB length) and a 512-byte reusable buffer for READ(6) / WRITE(6); prove LBA 100 flow through CPU register accesses and status/message completion.
+3. Add essential readiness, INQUIRY, sense/error handling, whole-device image file backend and persistent/read-only options; test multiblock buffering without whole-image copies.
+4. Trace legitimate Mac Plus ROM/SCSI Manager driver use, implementing additional commands (e.g. MODE SENSE / READ CAPACITY / READ(10)) only as evidence requires; unsupported opcodes return proper errors.
+5. Verify complete BlueSCSI-compatible device image byte fidelity and original-ROM boot/mount where media are available; retain OS image/driver creation under `PLUS-SYS-0006`.
 
-**Alternative rejected:** feed HFS filesystem calls or host block reads directly to the ROM/SCSI Manager as a paravirtual device. That would skip SCSI bus/controller semantics and undermine the required same-image-on-hardware test.
+**Rejected:** paravirtual disk calls, guest-RAM shortcuts, a simulated electrical SCSI bus, or a generic multi-device framework as an initial requirement. Those increase scope without improving the specified Plus firmware-visible behaviour.
 
-**Open questions for implementation:** exact target/bus interface after `PLUS-EMU-0004` is reviewed; minimum classic-Mac compatible mode-page/profile responses; which legally sourced device image and 5380/ROM revision to use for end-to-end smoke testing. These do not justify conflating the controller and disk tickets.
+**Open verification:** actual SCSI Manager command sequence/driver page requests, precise not-ready/phase semantics inherited from `PLUS-EMU-0004`, and identification of lawful bootable whole-device test media.
 
 **Commits**
 
