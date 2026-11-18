@@ -229,9 +229,39 @@ Use a regular image file containing 1 to 2,097,152 512-byte sectors
 or conversion. The Macintosh Plus ROM expects a driver descriptor at
 device block 0, a Plus-compatible disk driver and an Apple Partition Map.
 An HFS-only volume image, even with an `.hda` extension, will not mount
-by itself. Convert it to a whole-device image (for example with
-[Disk Jockey](https://diskjockey.onegeekarmy.eu/)) before attaching it.
-Booting from it also requires a bootable System volume.
+by itself. Convert it before attaching it. Booting also requires a
+bootable System volume.
+
+### Convert an HFS volume
+
+Use [hfs_to_device.py](tools/hfs_to_device.py) with Python 3.10+ and a
+whole-device template that already has a Macintosh Plus-compatible
+disk driver (for example, Apple Driver 4.3). Run from the `umac`
+directory:
+
+```sh
+python3 tools/hfs_to_device.py kiosky.hda \
+    --template 320_32MB_drive.hda --output HD10_512.hda
+./build-cmake/umac -s HD10_512.hda
+```
+
+The script copies the template's partition map and driver and replaces
+its final HFS partition with the input volume byte-for-byte. The input
+must be a raw classic HFS volume that fits that partition; Disk Copy
+headers, HFS+, and multiple-volume templates are not supported. No
+driver or System software is bundled. The script does not change either
+input, overwrite existing output, or install or bless a System Folder.
+Add `-d System70_boot.dsk` if you want to boot the floppy and mount the
+converted disk as a second volume.
+For other layouts, see [Disk Jockey](https://diskjockey.onegeekarmy.eu/).
+
+The standalone converter tests use generated fixtures:
+
+```sh
+python3 -m unittest discover -s tests -p test_hfs_to_device.py
+```
+
+### SCSI controller behavior
 
 Supported commands are TEST UNIT READY, REQUEST SENSE, INQUIRY,
 READ(6)/WRITE(6), READ(10)/WRITE(10) and MODE SENSE(6) for the current
