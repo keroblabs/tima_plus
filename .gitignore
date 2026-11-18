@@ -8,3 +8,7 @@ devel/umac/rom.bin
 devel/umac/320_32MB_drive.hda
 kiosk-macplus/
 
+build/
+devel/umac/HD10_512.hda
+devel/umac/kiosky.hda
+ram.bin
