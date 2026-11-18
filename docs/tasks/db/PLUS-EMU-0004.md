@@ -114,6 +114,8 @@ No complete SCSI disk implementation, image format conversion, Apple partition-m
 - **2026-11-18 — Research:** Consulted NCR documentation, Apple's SCSI Manager and MAME hardware mapping. Decoder aliases, actual ROM access patterns and pseudo-DMA edge behaviour remain to be established during implementation.
 - **2026-11-18 — Hardware-design clarification (user discussion):** The Macintosh Plus has **no dedicated SCSI DMA controller**; 5380 DRQ/IRQ are **not wired** to CPU interrupt/DMA logic. The CAS PAL's A9-dependent /SCSI vs /DACK address decode can be represented directly as a branch in uMac's memory-mapped access handler. Preserve internal 5380 pseudo-DMA state, but **do not** model a physical DACK signal or a separate PAL/DMA peripheral. Corrected the provisional `0x580100` DACK example to A9-set `0x580200`; exact aliases, access widths and premature-transfer semantics still require testing. This clarifies scope only, **not** an implementation approval or change in milestone priority.
 
+- **2026-11-18 — Related target ticket opened:** [PLUS-EMU-0005](PLUS-EMU-0005.md) specifies the independent direct-access SCSI hard-disk target, raw BlueSCSI-compatible whole-device image and end-to-end bus integration. This ticket retains the NCR 5380 and the bus/target attachment interface, including a synthetic target for isolated tests. Neither disk-image I/O nor image/boot tooling is to be embedded in the controller.
+
 **Proposed Change**
 
 **For triage and explicit approval, implement in these steps:**
