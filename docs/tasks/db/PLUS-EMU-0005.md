@@ -113,6 +113,18 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 - [BlueSCSI v2 documentation — supported command comparison](https://bluescsi.com/docs/Developers-(Advanced)): historical command-set comparison; verify required commands against original ROM/driver traces.
 - [NCR 5380 SCSI Interface Chip Design Manual (1985)](https://ftpmirror.your.org/pub/misc/bitsavers/components/ncr/scsi/NCR_5380_SCSI_Interface_Chip_Design_Manual_May85.pdf): controller-side data/phase handshakes.
 
+### Review Findings — round 1 (18 November 2026)
+
+**Result:** Disk command/sector-image architecture accepted in principle; **verification still required**. No confirmed disk-command implementation defect was found in this static review, so missing integration evidence is not presented as a code failure.
+
+| Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
+| --- | --- | --- | --- | --- |
+| `EMU5-R1` | `VERIFICATION_REQUIRED` | Tests exercised an unmodified Plus V3 ROM's **low-level SCSI routines** with a generated, unpartitioned image; normal Macintosh startup has not detected, mounted or booted a SCSI device. | Obtain a lawful *whole-device* Macintosh SCSI image containing partition map, Mac disk driver and bootable System. In the **current supported uMac ROM startup mode**, attempt actual disk detection/mount/boot, recording ROM/image hashes, commands, phase/status traces and result. Original *unmodified-ROM startup* is part of the separate authentic ROM/IWM milestone and must not be silently introduced as an extra requirement of this ticket. | **NOT TESTED — blocking integration evidence.** |
+| `EMU5-R2` | `VERIFICATION_REQUIRED` (conditional) | The target intentionally supports a limited command subset. READ CAPACITY(10), READ(10) and WRITE(10) have not been implemented; lack of unused commands alone is not a defect. | Use `EMU5-R1`'s driver command trace. Implement and test the smallest additional command/page *only if the actual boot/mount path requires it*; otherwise accept the documented limited command set. | **PENDING TRACE; no speculative expansion.** |
+| `EMU5-R3` | `FUTURE_SCOPE` | Same-image operation on physical BlueSCSI/M0001AP and Tima/Plus OS bootstrap are later program milestones. | Preserve the opaque 512-byte whole-device image and track physical tests under `PLUS-DEV-0009` / OS support under `PLUS-SYS-0006`. | **OUT OF CURRENT EMULATOR ACCEPTANCE; physical test NOT TESTED.** |
+
+**Review gate:** Attempt complete Macintosh SCSI device detection/mount/boot; record failures before adding features. Continue to reference the successful reported low-level ROM test as such, not as proof of full boot compatibility.
+
 **Notes**
 
 - **2026-11-18 — Scope decision:** Following the NCR 5380 address-selected pseudo-DMA discussion, the user identified the missing **actual disk**: add an emulated SCSI hard disk connected to the emulator's SCSI bus. Use the preallocated `PLUS-EMU-0005` ID and keep `PLUS-EMU-0004` host-controller-only. Specify a whole-device BlueSCSI-compatible image so the later hardware can use the same bytes.
@@ -126,6 +138,8 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 - **2026-11-18 — Test:** Clean CMake build and [`umac_scsi_test disk`](../../../devel/umac/README.md#scsi-tests) passed. The test read LBA 100 over PIO, wrote LBA 98 over PIO and LBAs 100–101 over pseudo-DMA, closed/reopened and verified exact bytes in the file and through guest MMIO. LBA 99 stayed unchanged when reset interrupted the last ACK of its write. A count-zero read returned 256 blocks ending at the last block. Tests also exercised readiness, INQUIRY, sense consumption, write protection, bounds, invalid CDBs, truncated reads, write/sync errors, malformed media and a target with no medium. Offscreen SDL smoke also passed with `-d`/`-w` and `-s`/`-t`/`-p` on disposable copies; the original fixtures were not modified.
 - **2026-11-18 — Original firmware test:** The unmodified Plus V3 low-level SCSI Manager routines wrote and read back 512 bytes at LBA 100 after the raw image was closed and reopened read-only, with GOOD and COMMAND COMPLETE both times. See the Notes in [PLUS-EMU-0004](PLUS-EMU-0004.md) for the ROM hash and actual register trace. Only a generated, unpartitioned device image was used; full detection/mount/boot and physical BlueSCSI/M0001AP compatibility are **NOT TESTED**.
 - **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. The implementation and evidence are ready for review, not yet approved or resolved.
+
+- **2026-11-18 — Independent code review / verification pending:** Static review of branch at `0318e03`; developer's command, persistence and original Plus V3 low-level SCSI test results were not independently rerun. No concrete disk command defect was found. `EMU5-R1` remains **NOT TESTED** for real disk detection/mount/boot with a bootable whole-device image; `EMU5-R2` requires additional opcodes only when actual ROM/driver traces demonstrate a need. Physical BlueSCSI is later scope (`EMU5-R3`). Set commit `179b13a` to `IN_REVIEW` and retain ticket `REVIEW`; no claim of resolution or source changes.
 
 **Proposed Change**
 
@@ -145,7 +159,7 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `plus-emu-0004-0005-scsi` | `179b13a` | `UNREVIEWED` | Attach one sector-buffered SCSI disk with raw-image persistence, CLI options and read/write tests. |
+| `plus-emu-0004-0005-scsi` | `179b13a` | `IN_REVIEW` | Attach sector-buffered disk and image backend; full ROM-managed device boot evidence pending (`EMU5-R1`). |
 
 **Resolution Description**
 

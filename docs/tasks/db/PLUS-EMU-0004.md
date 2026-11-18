@@ -118,6 +118,18 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 - [MAME Macintosh hardware model](https://github.com/mamedev/mame/blob/master/src/mame/apple/mac128.cpp) — independent mapping reference, **not source to copy** into this differently licensed emulator.
 - [Tima/Plus development roadmap](../../01-development-roadmap.md).
 
+### Review Findings — round 1 (18 November 2026)
+
+**Result:** Controller architecture accepted in principle; **specific correction required**. Original Plus V3 ROM low-level transfer test was developer-reported as passing, not independently rerun by this reviewer. No complete ROM startup/boot claim is approved.
+
+| Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
+| --- | --- | --- | --- | --- |
+| `EMU4-R1` | `CORRECTION_REQUIRED` | `ncr5380_attach()` accepts a valid-ID target with `transfer` but no `peek`. After selection, `bus_data()` unconditionally calls `target.peek()`, risking a null function call. The current built-in disk supplies valid callbacks, but the exposed API does not guarantee this. | Validate mandatory `peek`/`transfer` callbacks when attaching (or provide equivalent safe protection). Add a negative test for a malformed target descriptor; verify no crash and no false selection. | **OPEN — blocking correction.** |
+| `EMU4-R2` | `VERIFICATION_REQUIRED` | Full ROM-managed SCSI boot, hardware alias/width behaviour, and physical premature-DACK timing were not tested. Existing original-ROM SCSI Manager tests validate only low-level routines. | Rerun controller regression during `EMU5-R1` disk boot investigation, record any actual register mismatch and verified ROM traces; document hardware-only timing/aliases as unverified instead of assuming physical equivalence. | **NOT TESTED — integration/hardware limitations, not established defects.** |
+| `EMU4-R3` | `FUTURE_SCOPE` | Generic multi-initiator electrical bus, target mode, physical DRQ/IRQ and host DMA are not required by the Plus design. | No new work without verified ROM evidence; preserve the minimal register-compatible model. | **OUT OF SCOPE.** |
+
+**Review gate:** Correct `EMU4-R1`, add the regression test, and resubmit the new commit; then review it and the reported ROM low-level test evidence. Keep `EMU4-R2` explicitly recorded as `NOT TESTED` where not achievable in this ticket.
+
 **Notes**
 
 - **2026-11-18 — Discovery:** User requested the first dedicated ticket for the missing uMac SCSI controller. Confirmed in `main` at `a3549f3`: no NCR 5380 module/dispatch and relevant address window marked dummy. No runtime test was claimed.
@@ -140,6 +152,8 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 - **2026-11-18 — Original SCSI Manager test:** `umac_scsi_test rom <Plus V3 ROM>` passed with unmodified checksum `4d1f8172`, SHA-256 `dd908e2b65772a6b1f0c859c24e9a0d3dcde17b1c6a24f4abd8955846d7895e7`. The test invokes the identified low-level routines under Musashi, not ROM startup. A debugger trace observed `R0=80, R2=01` and ICR polling for arbitration, then `R1=04, R3=00, R0=82, R1=0d, R2=00, R4=00, R1=05`, BSY polling and `R1=00`. Each CDB byte used R0 and `R1=01/11/00` with REQ polling. The write selected phase 0 and wrote DMA start R5; the read selected phase 1 and wrote DMA start R7. There were exactly 512 byte accesses to `0x580201` (blind write) and 512 to `0x580200` (polled read), followed by PIO STATUS `00`, MESSAGE IN `00` and BUS FREE. Full SCSI boot, physical aliases, not-ready electrical behaviour and timing are **NOT TESTED**.
 - **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. Implementation and test evidence are available for review; no independent approval or resolution has been recorded.
 
+- **2026-11-18 — Independent code review / correction requested:** Static review of branch at `0318e03`; implementation tests, including original Plus V3 SCSI Manager routines, were **reported** as passing but were not rerun by this reviewer. `EMU4-R1` identifies an API-level null-callback risk requiring attachment validation and a negative test. `EMU4-R2` records missing full-device boot and hardware verification separately as **NOT TESTED**, not failed. Marked implementation commit `179b13a` `CHANGES_REQUESTED`; ticket remains `REVIEW` until corrective implementation is active. No source changes or acceptance recorded.
+
 **Proposed Change**
 
 **Review candidate — compact Macintosh Plus initiator emulation:**
@@ -159,7 +173,7 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `plus-emu-0004-0005-scsi` | `179b13a` | `UNREVIEWED` | Model 5380 initiator MMIO and handshakes; test controller and Plus V3 SCSI Manager I/O. |
+| `plus-emu-0004-0005-scsi` | `179b13a` | `CHANGES_REQUESTED` | Model 5380 MMIO and handshakes; `EMU4-R1` requires safe target attachment and a regression test. |
 
 **Resolution Description**
 
