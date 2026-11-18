@@ -328,7 +328,10 @@ int     main(int argc, char *argv[])
         umac_opt_disassemble(opt_disassemble);
         if (scsi_filename) {
                 struct scsi_target target = scsi_disk_target(&scsi_disk, scsi_id);
-                ncr5380_attach(&target);
+                if (!ncr5380_attach(&target)) {
+                        fprintf(stderr, "Cannot attach SCSI target %d: invalid descriptor\n", scsi_id);
+                        goto close_scsi;
+                }
         }
 
         ////////////////////////////////////////////////////////////////////////

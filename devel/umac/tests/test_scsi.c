@@ -179,7 +179,16 @@ static void test_controller(void)
         struct fixture f = {0};
         struct scsi_target target = { .id = 3, .ctx = &f, .reset = fixture_reset,
                 .peek = fixture_peek, .transfer = fixture_transfer };
-        ncr5380_attach(&target);
+        struct scsi_target incomplete[] = {target, target, target};
+        incomplete[0].peek = NULL;
+        incomplete[1].transfer = NULL;
+        incomplete[2].reset = NULL;
+        for (size_t i = 0; i < sizeof(incomplete) / sizeof(incomplete[0]); ++i) {
+                CHECK(ncr5380_attach(&target));
+                CHECK(!ncr5380_attach(&incomplete[i]));
+                select_target(target.id, false);
+        }
+        CHECK(ncr5380_attach(&target));
         select_target(1, false);
         select_target(3, true);
         wr(TCR, SCSI_COMMAND);
@@ -271,7 +280,7 @@ static void attach_disk(struct scsi_disk *disk, const struct scsi_disk_media *me
         ncr5380_attach(NULL);
         scsi_disk_init(disk, media);
         struct scsi_target target = scsi_disk_target(disk, 1);
-        ncr5380_attach(&target);
+        CHECK(ncr5380_attach(&target));
 }
 
 static void rw_command(uint8_t opcode, unsigned int lba, uint8_t blocks)

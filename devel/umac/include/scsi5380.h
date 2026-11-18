@@ -25,8 +25,11 @@ struct scsi_target {
         enum scsi_phase (*transfer)(void *ctx, enum scsi_phase phase, uint8_t data);
 };
 
-/* Copies the descriptor, borrowing its context until detached (NULL). */
-void ncr5380_attach(const struct scsi_target *target);
+/* Resets the controller and replaces the target. An ID in 0-6 and all three
+ * callbacks are required; invalid descriptors return false and leave the
+ * bus empty. NULL detaches successfully. The descriptor is copied, but its
+ * context must outlive the attachment. */
+bool ncr5380_attach(const struct scsi_target *target);
 void ncr5380_reset(void);
 uint8_t ncr5380_read_register(unsigned int reg);
 void ncr5380_write_register(unsigned int reg, uint8_t data);

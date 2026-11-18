@@ -121,10 +121,16 @@ void ncr5380_reset(void)
         reset_controller(false);
 }
 
-void ncr5380_attach(const struct scsi_target *device)
+bool ncr5380_attach(const struct scsi_target *device)
 {
         ncr5380_reset();
-        target = device && device->id < 7 ? *device : (struct scsi_target){0};
+        target = (struct scsi_target){0};
+        if (!device)
+                return true;
+        if (device->id >= 7 || !device->reset || !device->peek || !device->transfer)
+                return false;
+        target = *device;
+        return true;
 }
 
 static void update_selection(void)

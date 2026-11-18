@@ -1,7 +1,7 @@
 # PLUS-EMU-0004 — Implement Macintosh Plus NCR 5380 SCSI controller
 
 **ID:** `PLUS-EMU-0004`  
-**Status:** `REVIEW`\
+**Status:** `IN_PROGRESS`\
 **Title:** Implement Macintosh Plus NCR 5380 SCSI controller
 
 **Description**
@@ -153,6 +153,7 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 - **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. Implementation and test evidence are available for review; no independent approval or resolution has been recorded.
 
 - **2026-11-18 — Independent code review / correction requested:** Static review of branch at `0318e03`; implementation tests, including original Plus V3 SCSI Manager routines, were **reported** as passing but were not rerun by this reviewer. `EMU4-R1` identifies an API-level null-callback risk requiring attachment validation and a negative test. `EMU4-R2` records missing full-device boot and hardware verification separately as **NOT TESTED**, not failed. Marked implementation commit `179b13a` `CHANGES_REQUESTED`; ticket remains `REVIEW` until corrective implementation is active. No source changes or acceptance recorded.
+- **2026-11-18 — Status change:** `REVIEW` → `IN_PROGRESS` on `plus-emu-0004-0005-scsi` to correct `EMU4-R1`. Also check `reset`: COMMAND entry calls it unconditionally, so it is mandatory along with `peek` and `transfer`.
 
 **Proposed Change**
 
