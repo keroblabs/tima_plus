@@ -206,6 +206,7 @@ saving precious RAM space.
 ## SCSI hard disks
 
 The hard disk is separate from the patched floppy path (`-d`/`-w`).
+Without `-d`, the floppy drive is installed but empty.
 Attach a raw, whole-device image read-only with `-s`:
 
 ```sh

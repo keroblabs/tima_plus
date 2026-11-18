@@ -163,7 +163,7 @@ static sony_drinfo_t *get_drive_info(int num)
 void SonyInit(disc_descr_t discs[DISC_NUM_DRIVES])
 {
         drives[0].num = 0;
-        drives[0].to_be_mounted = 1;
+        drives[0].to_be_mounted = 0;
         drives[0].read_only = discs[0].read_only;
         drives[0].data = discs[0].base;
         drives[0].size = discs[0].size;
@@ -232,7 +232,6 @@ int16_t SonyOpen(uint32_t pb, uint32_t dce, uint32_t status)
         sony_drinfo_t *info = &drives[drnum];
 
         info->num = FindFreeDriveNumber(1); // ? 1 for internal, 2 for external
-        info->to_be_mounted = 0;
 
         // Original code allocated drive status record here (invoked
         // trap to NewPtrSysClear), but our driver does this instead
@@ -252,11 +251,13 @@ int16_t SonyOpen(uint32_t pb, uint32_t dce, uint32_t status)
         WriteMacInt8(info->status + dsMFMDisk, 0);
         //WriteMacInt8(info->status + dsTwoMegFmt, 0xff);	// 1.44MB (0 = 720K)
 
-        // If disk in drive...
-        WriteMacInt8(info->status + dsDiskInPlace, 1);	// Inserted removable disk
+        // An installed drive with no image must not trigger a mount or eject.
+        int disk_in_place = info->size != 0;
+        WriteMacInt8(info->status + dsDiskInPlace, disk_in_place);
         WriteMacInt8(info->status + dsWriteProt, info->read_only ? 0xff : 0);
-        DDBG(" disk inserted, flagging for mount\n");
-        info->to_be_mounted = 1;
+        if (disk_in_place)
+                DDBG(" disk inserted, flagging for mount\n");
+        info->to_be_mounted = disk_in_place;
 
         // Original code ddded drive to drive queue here (invoked trap
         // to AddDrive), but our driver does this after this PV call returns.
