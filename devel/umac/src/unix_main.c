@@ -60,8 +60,20 @@ static void     print_help(char *n)
 }
 
 #define DISP_SCALE      2
+#define UMAC_MOUSE_FREE_TITLE "umac (click to capture mouse)"
 
 static uint32_t framebuffer[DISP_WIDTH*DISP_HEIGHT];
+
+static bool     set_mouse_capture(SDL_Window *window, SDL_bool capture)
+{
+        if (SDL_SetRelativeMouseMode(capture) != 0) {
+                fprintf(stderr, "Cannot %s the mouse: %s\n",
+                        capture ? "capture" : "release", SDL_GetError());
+                return false;
+        }
+        SDL_SetWindowTitle(window, capture ? "umac (F12 releases mouse)" : UMAC_MOUSE_FREE_TITLE);
+        return true;
+}
 
 static bool     same_file(int fd, const char *path)
 {
@@ -290,7 +302,7 @@ int     main(int argc, char *argv[])
         SDL_Texture *texture;
 
         SDL_Init(SDL_INIT_VIDEO);
-        SDL_Window *window = SDL_CreateWindow("umac",
+        SDL_Window *window = SDL_CreateWindow(UMAC_MOUSE_FREE_TITLE,
                                               SDL_WINDOWPOS_UNDEFINED,
                                               SDL_WINDOWPOS_UNDEFINED,
                                               DISP_WIDTH * DISP_SCALE,
@@ -300,9 +312,6 @@ int     main(int argc, char *argv[])
                 perror("SDL window");
                 goto close_scsi;
         }
-        SDL_SetWindowGrab(window, SDL_TRUE);
-        SDL_SetRelativeMouseMode(SDL_TRUE);
-
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
@@ -353,8 +362,22 @@ int     main(int argc, char *argv[])
                                 done = 1;
                                 break;
 
+                        case SDL_WINDOWEVENT:
+                                if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                                        set_mouse_capture(window, SDL_FALSE);
+                                        mouse_button = 0;
+                                }
+                                break;
+
                         case SDL_KEYDOWN:
                         case SDL_KEYUP: {
+                                if (event.key.keysym.scancode == SDL_SCANCODE_F12) {
+                                        if (event.type == SDL_KEYDOWN) {
+                                                set_mouse_capture(window, SDL_FALSE);
+                                                mouse_button = 0;
+                                        }
+                                        break;
+                                }
                                 int c = SDLScan2MacKeyCode(event.key.keysym.scancode);
                                 c = (c << 1) | 1;
                                 printf("Key 0x%x -> 0x%x\n", event.key.keysym.scancode, c);
@@ -368,6 +391,9 @@ int     main(int argc, char *argv[])
                                 break;
 
                         case SDL_MOUSEBUTTONDOWN:
+                                if (event.button.button == SDL_BUTTON_LEFT &&
+                                    !SDL_GetRelativeMouseMode() && set_mouse_capture(window, SDL_TRUE))
+                                        break;
                                 mouse_button = 1;
                                 break;
 
@@ -403,6 +429,7 @@ int     main(int argc, char *argv[])
                 }
         } while (!done);
 
+        SDL_Quit();
         result = 0;
 close_scsi:
         if (scsi_filename) {

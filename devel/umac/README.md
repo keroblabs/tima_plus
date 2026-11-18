@@ -190,6 +190,10 @@ From the `umac` directory, run the CMake-built executable:
 
 If you built with the Makefile, use `./main` instead.
 
+The host pointer is free at startup. Left-click the emulator window to
+capture it; that click is not sent to the Mac if capture succeeds.
+Press **F12** or switch away from the window to release it.
+
 The RAM is actually a memory-mapped file, which can be useful for
 (basic) debugging: as the emulator runs, you can access the file and
 see the current state.  For example, you can capture screenshots from
