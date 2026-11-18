@@ -1,7 +1,7 @@
 # PLUS-EMU-0004 — Implement Macintosh Plus NCR 5380 SCSI controller
 
 **ID:** `PLUS-EMU-0004`  
-**Status:** `IN_PROGRESS`\
+**Status:** `REVIEW`\
 **Title:** Implement Macintosh Plus NCR 5380 SCSI controller
 
 **Description**
@@ -101,7 +101,7 @@ The source layout is deliberately flexible. A **single SCSI subsystem** with int
 - [x] PIO and A9-qualified pseudo-DMA transfer in both directions. Tests cover phase/status/REQ/ACK/DRQ, last-byte advancement, not-ready access and exactly one byte per valid transfer.
 - [x] STATUS, MESSAGE IN, BUS FREE, SCSI reset and incomplete/invalid access sequences are guest-visible and deterministic; neither controller nor disk directly manipulates guest RAM.
 - [x] No separate hardware DMA/IRQ, pin-level bus simulator, second initiator or mandatory general bus library is implemented.
-- [x] Identified original Plus V3 SCSI Manager routine trace, ROM hash and actual register sequence recorded below. Full unmodified-ROM SCSI boot is **NOT TESTED**.
+- [x] Identified original Plus V3 SCSI Manager routine trace, ROM hash and actual register sequence recorded below. Full SCSI boot in the supported startup mode is **NOT TESTED**; see [PLUS-EMU-0005](PLUS-EMU-0005.md), `EMU5-R1`.
 - [ ] Document tests, unsupported optional features, commits and explicit review before closing.
 
 ### Out of scope
@@ -124,11 +124,11 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 | Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
 | --- | --- | --- | --- | --- |
-| `EMU4-R1` | `CORRECTION_REQUIRED` | `ncr5380_attach()` accepts a valid-ID target with `transfer` but no `peek`. After selection, `bus_data()` unconditionally calls `target.peek()`, risking a null function call. The current built-in disk supplies valid callbacks, but the exposed API does not guarantee this. | Validate mandatory `peek`/`transfer` callbacks when attaching (or provide equivalent safe protection). Add a negative test for a malformed target descriptor; verify no crash and no false selection. | **OPEN — blocking correction.** |
-| `EMU4-R2` | `VERIFICATION_REQUIRED` | Full ROM-managed SCSI boot, hardware alias/width behaviour, and physical premature-DACK timing were not tested. Existing original-ROM SCSI Manager tests validate only low-level routines. | Rerun controller regression during `EMU5-R1` disk boot investigation, record any actual register mismatch and verified ROM traces; document hardware-only timing/aliases as unverified instead of assuming physical equivalence. | **NOT TESTED — integration/hardware limitations, not established defects.** |
+| `EMU4-R1` | `CORRECTION_REQUIRED` | The reviewed `ncr5380_attach()` accepted a valid-ID target with `transfer` but no `peek`. After selection, `bus_data()` could call the null callback. | Reject attachments missing mandatory callbacks and demonstrate no crash or false selection. | **CORRECTED in `fc2e911` — awaiting re-review.** |
+| `EMU4-R2` | `VERIFICATION_REQUIRED` | Full ROM-managed SCSI boot, hardware alias/width behaviour, and physical premature-DACK timing were not tested. Existing original-ROM SCSI Manager tests validate only low-level routines. | Rerun controller regression during `EMU5-R1` disk boot investigation, record any actual register mismatch and verified ROM traces; document hardware-only timing/aliases as unverified instead of assuming physical equivalence. | **Controller and low-level ROM regression passed. Boot and physical behaviour remain NOT TESTED.** |
 | `EMU4-R3` | `FUTURE_SCOPE` | Generic multi-initiator electrical bus, target mode, physical DRQ/IRQ and host DMA are not required by the Plus design. | No new work without verified ROM evidence; preserve the minimal register-compatible model. | **OUT OF SCOPE.** |
 
-**Review gate:** Correct `EMU4-R1`, add the regression test, and resubmit the new commit; then review it and the reported ROM low-level test evidence. Keep `EMU4-R2` explicitly recorded as `NOT TESTED` where not achievable in this ticket.
+**Review gate:** Review the `EMU4-R1` corrective commit and test evidence. Keep `EMU4-R2` explicitly **NOT TESTED** where startup or physical verification is unavailable.
 
 **Notes**
 
@@ -154,6 +154,9 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 - **2026-11-18 — Independent code review / correction requested:** Static review of branch at `0318e03`; implementation tests, including original Plus V3 SCSI Manager routines, were **reported** as passing but were not rerun by this reviewer. `EMU4-R1` identifies an API-level null-callback risk requiring attachment validation and a negative test. `EMU4-R2` records missing full-device boot and hardware verification separately as **NOT TESTED**, not failed. Marked implementation commit `179b13a` `CHANGES_REQUESTED`; ticket remains `REVIEW` until corrective implementation is active. No source changes or acceptance recorded.
 - **2026-11-18 — Status change:** `REVIEW` → `IN_PROGRESS` on `plus-emu-0004-0005-scsi` to correct `EMU4-R1`. Also check `reset`: COMMAND entry calls it unconditionally, so it is mandatory along with `peek` and `transfer`.
+- **2026-11-18 — Rework / test:** The new negative test first failed on the reviewed code because a descriptor with no `peek` asserted BSY at its configured ID. `fc2e911` makes `ncr5380_attach()` report failure and leave the bus empty if any of `reset`, `peek` or `transfer` is missing. The [controller regression](../../../devel/umac/tests/test_scsi.c) checks each omitted callback, verifies no BSY on selection, then exercises the complete target. CMake build and `umac_scsi_test controller`, `disk` and `rom <Plus V3 ROM>` passed when run directly. The ROM SHA-256 matched the earlier trace. The VS Code CMake adapter could not configure; no CTest adapter pass is claimed.
+- **2026-11-18 — Startup investigation (`EMU4-R2`):** The supported patched-ROM probe for [EMU5-R1](PLUS-EMU-0005.md) did not reach SCSI selection. A bounded diagnostic trace showed R1 writes `80`, `00` and R2 write `00` (reset/release), with no CDB or status phase observed. There is no new evidence of a 5380 register mismatch. Boot with a known-good image and physical alias/width/timing checks remain **NOT TESTED**.
+- **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. Resubmitted `fc2e911` as `UNREVIEWED`; retained the original `CHANGES_REQUESTED` entry. No reviewer approval or resolution recorded.
 
 **Proposed Change**
 
@@ -168,13 +171,14 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 **Alternative rejected:** patch Mac ROM SCSI calls or read/write guest RAM from host disk routines. This would not emulate the NCR 5380 register interface and would conceal compatibility defects.
 
-**Remaining verification:** validate the mirror and wider-access policy, premature pseudo-DMA and timing on physical hardware, and exercise an actual bootable device image through unmodified ROM startup. The routine-level V3 trace does not cover those conditions.
+**Remaining verification:** validate aliases, wider accesses, premature pseudo-DMA and timing on physical hardware, and exercise a bootable device image in the supported startup mode under `EMU5-R1`. The routine-level V3 trace does not cover those conditions. Authentic, unmodified ROM startup is separately scoped under `PLUS-EMU-0003`.
 
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `plus-emu-0004-0005-scsi` | `179b13a` | `CHANGES_REQUESTED` | Model 5380 MMIO and handshakes; `EMU4-R1` requires safe target attachment and a regression test. |
+| `plus-emu-0004-0005-scsi` | `fc2e911` | `UNREVIEWED` | Reject malformed target descriptors and verify that none can respond to selection (`EMU4-R1`). |
 
 **Resolution Description**
 

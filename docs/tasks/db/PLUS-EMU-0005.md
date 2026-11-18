@@ -96,7 +96,7 @@ The controller and disk can share a **single compiled SCSI subsystem** with a mi
 - [x] Core TEST UNIT READY, INQUIRY, REQUEST SENSE and CHECK CONDITION/error pathways are tested. MODE SENSE(6) advertises write protection; no speculative mode pages or ten-byte commands are implemented.
 - [x] Both regular PIO and A9-selected pseudo-DMA exercise a complete command/data/status/message transaction through the guest-visible 5380. Tests cover reset, invalid opcode, absent medium, not-ready, premature accesses and phase mismatches without bypassing registers or copying disk data into guest RAM directly.
 - [x] Raw whole-device 512-byte-sector handling validates file size and permissions, read-only/persistent semantics, and write survival after closing/reopening. Tests compare raw file bytes at the written LBAs and their neighbors.
-- [ ] Full detection/mount/boot from a partitioned device image with an original Plus ROM is **NOT TESTED**. Isolated original V3 SCSI Manager read/write passed on generated raw media.
+- [ ] Full detection/mount/boot from a partitioned device image in supported patched-ROM startup is **NOT TESTED**. Isolated unmodified V3 SCSI Manager read/write passed on generated raw media; authentic ROM startup is tracked separately.
 - [ ] Physical BlueSCSI/M0001AP same-image testing is **NOT TESTED**.
 - [ ] Record implementation commits, review approval, any ROM-required commands and remaining unsupported functionality before closure.
 
@@ -119,7 +119,7 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 
 | Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
 | --- | --- | --- | --- | --- |
-| `EMU5-R1` | `VERIFICATION_REQUIRED` | Tests exercised an unmodified Plus V3 ROM's **low-level SCSI routines** with a generated, unpartitioned image; normal Macintosh startup has not detected, mounted or booted a SCSI device. | Obtain a lawful *whole-device* Macintosh SCSI image containing partition map, Mac disk driver and bootable System. In the **current supported uMac ROM startup mode**, attempt actual disk detection/mount/boot, recording ROM/image hashes, commands, phase/status traces and result. Original *unmodified-ROM startup* is part of the separate authentic ROM/IWM milestone and must not be silently introduced as an extra requirement of this ticket. | **NOT TESTED — blocking integration evidence.** |
+| `EMU5-R1` | `VERIFICATION_REQUIRED` | Tests exercised an unmodified Plus V3 ROM's **low-level SCSI routines** with a generated, unpartitioned image; normal Macintosh startup has not detected, mounted or booted a SCSI device. | Obtain a lawful *whole-device* Macintosh SCSI image containing partition map, Mac disk driver and bootable System. In the **current supported uMac ROM startup mode**, attempt actual disk detection/mount/boot, recording ROM/image hashes, commands, phase/status traces and result. Original *unmodified-ROM startup* is part of the separate authentic ROM/IWM milestone and must not be silently introduced as an extra requirement of this ticket. | **Startup probe stopped before SCSI selection. Bootable-image detection/mount/boot remains NOT TESTED.** |
 | `EMU5-R2` | `VERIFICATION_REQUIRED` (conditional) | The target intentionally supports a limited command subset. READ CAPACITY(10), READ(10) and WRITE(10) have not been implemented; lack of unused commands alone is not a defect. | Use `EMU5-R1`'s driver command trace. Implement and test the smallest additional command/page *only if the actual boot/mount path requires it*; otherwise accept the documented limited command set. | **PENDING TRACE; no speculative expansion.** |
 | `EMU5-R3` | `FUTURE_SCOPE` | Same-image operation on physical BlueSCSI/M0001AP and Tima/Plus OS bootstrap are later program milestones. | Preserve the opaque 512-byte whole-device image and track physical tests under `PLUS-DEV-0009` / OS support under `PLUS-SYS-0006`. | **OUT OF CURRENT EMULATOR ACCEPTANCE; physical test NOT TESTED.** |
 
@@ -140,6 +140,9 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 - **2026-11-18 — Status change:** `IN_PROGRESS` → `REVIEW`. The implementation and evidence are ready for review, not yet approved or resolved.
 
 - **2026-11-18 — Independent code review / verification pending:** Static review of branch at `0318e03`; developer's command, persistence and original Plus V3 low-level SCSI test results were not independently rerun. No concrete disk command defect was found. `EMU5-R1` remains **NOT TESTED** for real disk detection/mount/boot with a bootable whole-device image; `EMU5-R2` requires additional opcodes only when actual ROM/driver traces demonstrate a need. Physical BlueSCSI is later scope (`EMU5-R3`). Set commit `179b13a` to `IN_REVIEW` and retain ticket `REVIEW`; no claim of resolution or source changes.
+- **2026-11-18 — Test media investigation (`EMU5-R1`):** The only local System image, `System70_boot.dsk`, is an HFS floppy image with `LK` boot blocks, not a whole-device image with a partition map and disk driver. No suitable lawful, known-good bootable device image was available. Did not fetch an unofficial System image or substitute the floppy for a SCSI device.
+- **2026-11-18 — Startup attempt (`EMU5-R1`):** Ran the supported `.Sony`-patched CLI offscreen with `-r <Plus V3 ROM> -s HD10_512.hda`, read-only and no `-d`. ROM input SHA-256 `dd908e2b65772a6b1f0c859c24e9a0d3dcde17b1c6a24f4abd8955846d7895e7`; synthetic all-zero 300-sector image SHA-256 `0c5cc90b079d0d9c1ded1376357d23a9782a704a83e01731f50ccd162e246492` (unchanged). The emulator reported `DISC: EJECT` and exited 1 before selecting the SCSI target. The legacy [`SonyOpen()`](../../../devel/umac/src/disc.c) reports a floppy inserted without backing media; its eject callback terminates the SDL build. A bounded diagnostic run skipping only that exit in the debugger observed the initial controller reset but no CDB, data, status or message phase for 5 seconds. This is a startup blocker, not evidence that any SCSI opcode or a bootable image failed. The `.Sony` path was not changed in this rework.
+- **2026-11-18 — Regression / disposition:** The native disk and unmodified Plus V3 SCSI Manager tests passed on the corrected controller revision. No driver CDB trace justified adding commands or mode pages, so `EMU5-R2` remains pending. Keep `179b13a` `IN_REVIEW` and the ticket `REVIEW`. Full boot/mount and physical BlueSCSI remain **NOT TESTED**.
 
 **Proposed Change**
 
@@ -149,11 +152,11 @@ Do **not** build a second NCR 5380, a full electrical SCSI bus, multi-initiator/
 2. Implement COMMAND-phase CDB collection (first-byte opcode → CDB length) and a 512-byte reusable buffer for READ(6) / WRITE(6); prove LBA 100 flow through CPU register accesses and status/message completion.
 3. Add essential readiness, INQUIRY, sense/error handling, whole-device image file backend and persistent/read-only options; test multiblock buffering without whole-image copies.
 4. Trace legitimate Mac Plus ROM/SCSI Manager driver use, implementing additional commands (e.g. MODE SENSE / READ CAPACITY / READ(10)) only as evidence requires; unsupported opcodes return proper errors.
-5. Verify complete BlueSCSI-compatible device image byte fidelity and original-ROM boot/mount where media are available; retain OS image/driver creation under `PLUS-SYS-0006`.
+5. Verify whole-device byte fidelity and boot/mount in supported patched-ROM startup with suitable media; retain authentic ROM startup under `PLUS-EMU-0003` and OS image/driver creation under `PLUS-SYS-0006`.
 
 **Rejected:** paravirtual disk calls, guest-RAM shortcuts, a simulated electrical SCSI bus, or a generic multi-device framework as an initial requirement. Those increase scope without improving the specified Plus firmware-visible behaviour.
 
-**Open verification:** obtain a lawful bootable whole-device image, capture any further commands/pages its driver needs, and verify mount/boot and physical BlueSCSI byte-for-byte interchange.
+**Open verification:** triage the legacy empty-floppy startup exit, obtain a lawful bootable whole-device image, and capture the supported startup path's actual driver commands and mount/boot result. Physical BlueSCSI interchange remains later scope.
 
 **Commits**
 
