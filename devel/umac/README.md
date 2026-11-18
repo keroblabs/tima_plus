@@ -117,7 +117,7 @@ chars 'LK'.  Some emulators append a header (which can be `dd`'d off).
 If you opened `devel` in VS Code, run **CMake: Configure** and
 **CMake: Build**. The workspace settings use `umac` as the source
 directory and put the build in `umac/build-cmake`.
-In **Project Outline**, expand the `umac` project to find the `main`
+In **Project Outline**, expand the `umac` project to find the `umac`
 emulator target.
 
 To build from a shell, run these commands from the `umac` directory
@@ -128,7 +128,7 @@ cmake -S . -B build-cmake
 cmake --build build-cmake --parallel
 ```
 
-The executable is `build-cmake/main`. [CMakeLists.txt](CMakeLists.txt)
+The executable is `build-cmake/umac`. [CMakeLists.txt](CMakeLists.txt)
 lists the sources, include directories, and build flags explicitly.
 The Musashi opcode files are generated in the build directory, not in
 the sibling checkout.
@@ -182,11 +182,13 @@ memory use; a Mac 128K is too small for any real increase.
 
 # Running
 
+From the `umac` directory, run the CMake-built executable:
+
 ```
-./main -r <path_to_MacPlusV3_rom> -d <path_to_disc_image>
+./build-cmake/umac -r <path_to_MacPlusV3_rom> -d <path_to_disc_image>
 ```
 
-For a CMake build, use `./build-cmake/main` instead.
+If you built with the Makefile, use `./main` instead.
 
 The RAM is actually a memory-mapped file, which can be useful for
 (basic) debugging: as the emulator runs, you can access the file and
