@@ -33,7 +33,8 @@ This emulates the following hardware:
   * VIA A/B GPIO ports, and IRQs (1Hz and Vsync)
   * VIA shift register for keyboard
   * SCC DCD pin change interrupts, for mouse
-  * Paravirtualised disc storage
+  * Paravirtualised floppy storage
+  * Macintosh Plus NCR 5380 initiator with one optional SCSI hard disk
   * Defaults to 128K of RAM, but will run as a Mac 512K by building
     with `MEMSIZE=512`.  Or, you could use 1024, 2048, or 4096 to make
     a 1/2/4MB Mac Plus-like machine.  Straying off-piste a little, you
@@ -45,8 +46,7 @@ This emulates the following hardware:
 There's no emulation for:
 
   * IWM/realistic floppy drives
-  * SCSI; the machine is sort of like a Mac Plus without SCSI.
-  * More than one disc, or runtime image-switching
+  * More than one floppy or SCSI hard disk, or runtime image-switching
   * Sound (a lot of work for a beep)
   * VIA timers (Space Invaders runs too fast, probably because of this)
   * Serial/printer/Appletalk
@@ -202,6 +202,62 @@ patches are applied.  This can be useful to prepare a ROM image for
 embedded builds, so as to avoid having to patch the ROM at runtime.
 That then means the ROM can be in immutable storage (e.g. flash),
 saving precious RAM space.
+
+## SCSI hard disks
+
+The hard disk is separate from the patched floppy path (`-d`/`-w`).
+Attach a raw, whole-device image read-only with `-s`:
+
+```sh
+./build-cmake/umac -r rom.bin -d System70_boot.dsk -s HD10_512.hda
+```
+
+The default is ID 1, LUN 0. Use `-t 0` through `-t 6` to override the
+target ID (the Mac is ID 7). The filename is not interpreted. Add `-p`
+to enable in-place writes; **use a copy of the image**. A successful
+WRITE(6) syncs the file before returning GOOD. This does not roll back
+sectors already written if a multiblock command is interrupted or fails.
+Do not modify the backing file from another process while it is mounted.
+
+Use a regular image file containing 1 to 2,097,152 512-byte sectors
+(up to 1 GiB). Block 0 is the first 512 bytes, with no header or
+conversion. A bootable Mac/BlueSCSI device image also needs a partition
+map, a suitable Macintosh disk driver and a bootable system. An HFS
+volume image alone is not a bootable SCSI device image.
+
+Supported commands are TEST UNIT READY, REQUEST SENSE, INQUIRY,
+READ(6)/WRITE(6) and MODE SENSE(6) for the current header/block descriptor
+(including the write-protect bit). Other commands return CHECK CONDITION.
+The controller supports polled REQ/ACK and CPU-driven pseudo-DMA without
+CPU interrupts or wait states. It has no target mode, contention,
+disconnect/reselect, MESSAGE OUT, parity faults or external DMA/EOP.
+Byte reads use even addresses; writes use odd addresses. An aligned
+word accesses only the applicable lane (upper read, lower write); an
+aligned long is two successive word cycles. These wider-access rules
+are emulator conventions not yet verified on physical hardware.
+
+### SCSI tests
+
+With the CMake test target `umac_scsi_test` built (enabled by default),
+run the two headless cases from `umac`. They use synthetic data only:
+
+```sh
+./build-cmake/umac_scsi_test controller
+./build-cmake/umac_scsi_test disk
+```
+
+The controller case covers address decoding, register state, arbitration,
+selection and valid/invalid handshakes. The disk case reads LBA 100,
+writes sectors with PIO and pseudo-DMA, closes and reopens its
+disposable image, then checks the exact raw bytes, neighboring
+sectors and SCSI error reporting.
+
+If you have a Mac Plus V3 ROM, `umac_scsi_test rom /path/to/rom.bin`
+also exercises a persistent sector round trip using the *unmodified
+SCSI Manager routines* under Musashi. Give CMake the
+`UMAC_TEST_PLUS_ROM` file path to include this case in test discovery.
+This tests the firmware I/O routines in isolation, not booting/mounting
+a partitioned image or using physical BlueSCSI hardware.
 
 # Hacks/Technical details
 

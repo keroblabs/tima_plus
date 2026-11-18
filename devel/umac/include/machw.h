@@ -86,7 +86,10 @@ extern int overlay;
 #define IS_IWM(x)       ((ADR24(x) >= 0xdfe1ff) && (ADR24(x) < (0xdfe1ff + 0x2000)))
 #define IS_SCC_RD(x)    ((ADR24(x) & 0xf00000) == 0x900000)
 #define IS_SCC_WR(x)    ((ADR24(x) & 0xf00000) == 0xb00000)
-#define IS_DUMMY(x)     (((ADR24(x) >= 0x800000) && (ADR24(x) < 0x9ffff8)) || ((ADR24(x) & 0xf00000) == 0x500000))
+#define IS_SCSI(x)      ((ADR24(x) & 0xf80000) == 0x580000)
+#define SCSI_DACK(x)    ((x) & 0x200)
+#define SCSI_REG(x)     (((x) >> 4) & 7)
+#define IS_DUMMY(x)     (((ADR24(x) >= 0x800000) && (ADR24(x) < 0x9ffff8)) || ((ADR24(x) & 0xf80000) == 0x500000))
 #define IS_TESTSW(x)    (ADR24(x) >= 0xf00000)
 
 

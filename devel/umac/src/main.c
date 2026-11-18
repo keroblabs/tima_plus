@@ -5,7 +5,7 @@
  * Main file with:
  * - umac_ entry points,
  * - main loop,
- * - address decoding/memory map, dispatch to VIA/SCC/disc
+ * - address decoding/memory map, dispatch to VIA/SCC/IWM/SCSI/disc
  * - Keyboard/mouse event dispatch
  *
  * Copyright 2024 Matt Evans
@@ -46,6 +46,7 @@
 #include "scc.h"
 #include "rom.h"
 #include "disc.h"
+#include "scsi5380.h"
 
 #ifdef PICO
 #include "pico.h"
@@ -374,6 +375,12 @@ unsigned int    FAST_FUNC(cpu_read_byte)(unsigned int address)
                 return iwm_read(address);
         if (IS_SCC_RD(address))
                 return scc_read(address);
+        if (IS_SCSI(address)) {
+                if (address & 1)
+                        return 0;
+                return SCSI_DACK(address) ? ncr5380_pseudo_dma_read()
+                                          : ncr5380_read_register(SCSI_REG(address));
+        }
         if (IS_DUMMY(address))
                 return 0;
 
@@ -388,6 +395,9 @@ unsigned int    FAST_FUNC(cpu_read_word)(unsigned int address)
         if (IS_ROM(address))
                 return ROM_RD16(address & (ROM_SIZE - 1));
 
+        /* SCSI reads use the upper lane: one NCR access per 68000 word cycle. */
+        if (IS_SCSI(address))
+                return (address & 1) ? 0 : cpu_read_byte(address) << 8;
         if (IS_TESTSW(address))
                 return 0;
 
@@ -402,6 +412,12 @@ unsigned int    FAST_FUNC(cpu_read_long)(unsigned int address)
         if (IS_ROM(address))
                 return ROM_RD32(address & (ROM_SIZE - 1));
 
+        if (IS_SCSI(address)) {
+                if (address & 1)
+                        return 0;
+                unsigned int high = cpu_read_word(address);
+                return (high << 16) | cpu_read_word(address + 2);
+        }
         if (IS_TESTSW(address))
                 return 0;
 
@@ -454,6 +470,15 @@ void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
                 scc_write(address, value);
                 return;
         }
+        if (IS_SCSI(address)) {
+                if (address & 1) {
+                        if (SCSI_DACK(address))
+                                ncr5380_pseudo_dma_write(value);
+                        else
+                                ncr5380_write_register(SCSI_REG(address), value);
+                }
+                return;
+        }
         if (IS_DUMMY(address))
                 return;
         if (address == PV_SONY_ADDR) {
@@ -471,6 +496,11 @@ void    FAST_FUNC(cpu_write_word)(unsigned int address, unsigned int value)
                 RAM_WR16(CLAMP_RAM_ADDR(address), value);
                 return;
         }
+        if (IS_SCSI(address)) {
+                if (!(address & 1))
+                        cpu_write_byte(address + 1, value & 0xff);
+                return;
+        }
         printf("Ignoring write %04x to address %08x\n", value&0xffff, address);
 }
 
@@ -478,6 +508,13 @@ void    FAST_FUNC(cpu_write_long)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
                 RAM_WR32(CLAMP_RAM_ADDR(address), value);
+                return;
+        }
+        if (IS_SCSI(address)) {
+                if (!(address & 1)) {
+                        cpu_write_word(address, value >> 16);
+                        cpu_write_word(address + 2, value & 0xffff);
+                }
                 return;
         }
         printf("Ignoring write %08x to address %08x\n", value, address);
@@ -496,7 +533,7 @@ static void     update_overlay_layout(void)
 /* Called when the CPU pulses the RESET line */
 void    cpu_pulse_reset(void)
 {
-        /* Reset IRQs etc. */
+        ncr5380_reset();
 }
 
 /* Called when the CPU acknowledges an interrupt */
@@ -567,6 +604,7 @@ int     umac_init(void *ram_base, void *rom_base, disc_descr_t discs[DISC_NUM_DR
         _ram_base = ram_base;
         _rom_base = rom_base;
 
+        ncr5380_reset();
 	m68k_init();
 	m68k_set_cpu_type(M68K_CPU_TYPE_68000);
 	m68k_pulse_reset();
@@ -685,6 +723,7 @@ static void     mouse_tick(void)
 void    umac_reset(void)
 {
         overlay = 1;
+        ncr5380_reset();
         m68k_pulse_reset();
 }
 
