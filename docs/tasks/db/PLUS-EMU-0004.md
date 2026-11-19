@@ -1,7 +1,7 @@
 # PLUS-EMU-0004 — Implement Macintosh Plus NCR 5380 SCSI controller
 
 **ID:** `PLUS-EMU-0004`  
-**Status:** `RESOLVED`\
+**Status:** `CLOSED`\
 **Title:** Implement Macintosh Plus NCR 5380 SCSI controller
 
 **Description**
@@ -102,7 +102,7 @@ The source layout is deliberately flexible. A **single SCSI subsystem** with int
 - [x] STATUS, MESSAGE IN, BUS FREE, SCSI reset and incomplete/invalid access sequences are guest-visible and deterministic; neither controller nor disk directly manipulates guest RAM.
 - [x] No separate hardware DMA/IRQ, pin-level bus simulator, second initiator or mandatory general bus library is implemented.
 - [x] Identified original Plus V3 SCSI Manager routine trace, ROM hash and actual register sequence recorded below. The project owner subsequently **manually confirmed a generated hard-drive image booted in uMac**, with floppy and SCSI disk support together; see [PLUS-EMU-0005](PLUS-EMU-0005.md), `EMU5-R1`. This owner-reported end-to-end result was not independently rerun by the reviewer.
-- [x] Documented test evidence, limited emulation scope, independent code-review approval and project-owner manual boot verification. The ticket is **RESOLVED**, awaiting the owner's required GitHub PR review and merge; **not CLOSED**.
+- [x] Documented test evidence, limited emulation scope, independent code-review approval and project-owner manual boot verification. The ticket is **CLOSED** following the owner's approved PR #1 and merge into `main`.
 
 ### Out of scope
 
@@ -128,7 +128,7 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 | `EMU4-R2` | `VERIFICATION_REQUIRED` | Earlier ROM startup probes did not automatically mount the SCSI image; isolated original-ROM SCSI Manager transfers did pass. Hardware alias/width behaviour and premature-DACK electrical timing remain untested. | Preserve earlier diagnostic history; accept owner's subsequent working uMac/generated hard-drive image report separately from developer unit-test evidence. Defer physical-only measurements to later hardware work. | **ACCEPTED** — project-owner manual uMac hard-drive boot reported successful; physical timing/alias validation **NOT TESTED**, accepted out of scope for this controller ticket. |
 | `EMU4-R3` | `FUTURE_SCOPE` | Generic multi-initiator electrical bus, target mode, physical DRQ/IRQ and host DMA are not required by the Plus design. | No new work without verified ROM evidence; preserve the minimal register-compatible model. | **OUT OF SCOPE.** |
 
-**Review conclusion:** `EMU4-R1` correction reviewed and accepted; developer tests plus the project owner's reported manual uMac boot satisfy this ticket's software-emulation scope. Physical-only compatibility limitations remain documented. **RESOLVED pending the owner's mandatory GitHub PR review and merge; not CLOSED.**
+**Review conclusion:** `EMU4-R1` correction reviewed and accepted; developer tests plus the project owner's reported manual uMac boot satisfy this ticket's software-emulation scope. Physical-only compatibility limitations remain documented. **CLOSED** — the owner's required GitHub PR review and integration into `main` are complete.
 
 **Notes**
 
@@ -166,6 +166,8 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 - **2026-11-18 — Project-owner manual acceptance evidence:** The project owner explicitly reported manually verifying the **hard-drive-image-generation script**, confirmed that it generated the **correct hard-drive image**, and verified that **uMac boots successfully with the generated SCSI hard-drive image**, with floppy-disk and hard-drive functionality available together. This is the owner's real manual integration test, not an independently executed test by this reviewer. The script pathname, image hash and exact invocation were not supplied in this review; do not invent them. This later success supersedes the earlier unsuccessful startup investigations as the present acceptance result, without erasing their history.
 - **2026-11-18 — Reviewer approval / resolution:** Independently reviewed the NCR 5380 register, phase, REQ/ACK, pseudo-DMA, and disk interface code, as well as the mandatory-callback validation added in `fc2e911`. The three missing-callback negative tests address `EMU4-R1`; no further in-scope controller correction is requested. The project owner accepted this code review and requested **`REVIEW` → `RESOLVED`**, awaiting their **separate, required GitHub PR review** and merge. Marked implementation commits `179b13a` and `fc2e911` **`APPROVED`** as a corrected combined implementation (the original changes request remains visible in earlier Notes). Full physical NCR alias/timing and BlueSCSI device checks are outside this ticket and remain untested. Do **not** mark `CLOSED` before merge.
 
+- **2026-11-19 — Project-owner PR approval / merge / closure:** The project owner completed their required independent GitHub PR review and merged [PR #1](https://github.com/keroblabs/tima_plus/pull/1), **“SCSI implementation approved”**, into `main` as merge commit [`e568e6d`](https://github.com/keroblabs/tima_plus/commit/e568e6d097ab0280ccac044b96490eaafd277c0c). The approved NCR 5380 implementation and corrective commit are integrated. The prior project-owner manual verification of the hard-drive image generator, successful SCSI hard-drive boot and coexistence with floppy remains the functional acceptance evidence. Ticket status **`RESOLVED` → `CLOSED`**. This is an integration/administrative closure; no additional runtime test is claimed here. Physical IWM/floppy/BlueSCSI and hardware timing validation remain later milestone work.
+
 **Proposed Change**
 
 **Review candidate — compact Macintosh Plus initiator emulation:**
@@ -190,4 +192,4 @@ No disk command/image implementation (separate `PLUS-EMU-0005`), disk format con
 
 **Resolution Description**
 
-**RESOLVED — reviewed and accepted on 18 November 2026; pending GitHub PR review and merge.** The Macintosh Plus NCR 5380 initiator is implemented with memory-mapped registers, single-target selection, logical SCSI phases, correct PIO/REQ-ACK and A9-selected pseudo-DMA, status/reset and no nonexistent external DMA/IRQ engine. Unit and original Plus V3 low-level SCSI Manager tests were reported passing. The `ncr5380_attach()` mandatory-callback defect raised during review was fixed and covered by a negative test in `fc2e911`; reviewer accepts `179b13a` together with its correction. The project owner manually validated the hard-drive-image-generation script and the resulting working SCSI image, and confirmed uMac booted successfully with hard-drive and floppy support. Physical hardware/timing/BlueSCSI interchange were not tested and belong to later milestones. The earlier failed startup investigations remain in Notes as historical evidence. **Do not transition to `CLOSED` until the project owner's required PR review and integration into `main` are completed.**
+**CLOSED — accepted 18 November 2026, integrated into `main` on 19 November 2026 via PR #1 (`e568e6d`).** The Macintosh Plus NCR 5380 initiator is implemented with memory-mapped registers, single-target selection, logical SCSI phases, correct PIO/REQ-ACK and A9-selected pseudo-DMA, status/reset and no nonexistent external DMA/IRQ engine. Unit and original Plus V3 low-level SCSI Manager tests were reported passing. The `ncr5380_attach()` mandatory-callback defect raised during review was fixed and covered by a negative test in `fc2e911`; reviewer accepts `179b13a` together with its correction. The project owner manually validated the hard-drive-image-generation script and the resulting working SCSI image, and confirmed uMac booted successfully with hard-drive and floppy support. Physical hardware/timing/BlueSCSI interchange were not tested and belong to later milestones. The earlier failed startup investigations remain in Notes as historical evidence. **Owner's mandatory PR review and merge have completed. The ticket is CLOSED; no further action is required for this accepted emulator scope.**
