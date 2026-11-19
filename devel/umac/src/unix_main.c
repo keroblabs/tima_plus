@@ -35,10 +35,12 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include "SDL.h"
 
 #include "rom.h"
+#include "rtc.h"
 #include "umac.h"
 #include "machw.h"
 #include "disc.h"
@@ -56,6 +58,7 @@ static void     print_help(char *n)
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
+               "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
                "\t-i\t\t\tDisassembled instruction trace\n", n);
 }
 
@@ -80,6 +83,121 @@ static bool     same_file(int fd, const char *path)
         struct stat opened, other;
         return path && fstat(fd, &opened) == 0 && stat(path, &other) == 0 &&
                opened.st_dev == other.st_dev && opened.st_ino == other.st_ino;
+}
+
+/* Resolve existing files normally.  For a new output, resolve its parent
+ * and append the basename so aliases such as ./dir/../file compare equal. */
+static char     *canonical_path_for_create(const char *path)
+{
+        if (!path || !*path) {
+                errno = EINVAL;
+                return NULL;
+        }
+
+        char *resolved = realpath(path, NULL);
+        if (resolved)
+                return resolved;
+        if (errno != ENOENT)
+                return NULL;
+
+        struct stat st;
+        if (lstat(path, &st) == 0) {
+                errno = ELOOP;       /* Includes dangling symbolic links. */
+                return NULL;
+        }
+        if (errno != ENOENT)
+                return NULL;
+
+        char *copy = strdup(path);
+        if (!copy)
+                return NULL;
+        char *slash = strrchr(copy, '/');
+        char *base = copy;
+        const char *parent = ".";
+        if (slash) {
+                base = slash + 1;
+                if (slash == copy)
+                        parent = "/";
+                else {
+                        *slash = '\0';
+                        parent = copy;
+                }
+        }
+        if (!*base || !strcmp(base, ".") || !strcmp(base, "..")) {
+                free(copy);
+                errno = EINVAL;
+                return NULL;
+        }
+
+        char *real_parent = realpath(parent, NULL);
+        if (!real_parent) {
+                int saved_errno = errno;
+                free(copy);
+                errno = saved_errno;
+                return NULL;
+        }
+        size_t needed = strlen(real_parent) + strlen(base) + 2;
+        resolved = malloc(needed);
+        if (resolved) {
+                snprintf(resolved, needed, "%s%s%s", real_parent,
+                         !strcmp(real_parent, "/") ? "" : "/", base);
+        } else {
+                errno = ENOMEM;
+        }
+        int saved_errno = errno;
+        free(real_parent);
+        free(copy);
+        errno = saved_errno;
+        return resolved;
+}
+
+static int      paths_alias(const char *a, const char *b, bool *alias)
+{
+        char *canonical_a = canonical_path_for_create(a);
+        char *canonical_b = canonical_path_for_create(b);
+        if (!canonical_a || !canonical_b) {
+                int saved_errno = errno;
+                free(canonical_a);
+                free(canonical_b);
+                errno = saved_errno;
+                return -1;
+        }
+        *alias = !strcmp(canonical_a, canonical_b);
+        free(canonical_a);
+        free(canonical_b);
+        if (*alias)
+                return 0;
+
+        struct stat stat_a, stat_b;
+        if (stat(a, &stat_a) == 0 && stat(b, &stat_b) == 0) {
+                *alias = stat_a.st_dev == stat_b.st_dev &&
+                         stat_a.st_ino == stat_b.st_ino;
+                return 0;
+        }
+        if ((errno == ENOENT) || (errno == ENOTDIR)) {
+                *alias = false;
+                return 0;
+        }
+        return -1;
+}
+
+static int      reject_pram_aliases(const char *pram_path,
+                                    const char *const *protected_paths,
+                                    size_t protected_count,
+                                    const char **conflicting_path)
+{
+        for (size_t i = 0; i < protected_count; i++) {
+                if (!protected_paths[i])
+                        continue;
+                bool alias;
+                if (paths_alias(pram_path, protected_paths[i], &alias) != 0)
+                        return -1;
+                if (alias) {
+                        *conflicting_path = protected_paths[i];
+                        return 1;
+                }
+        }
+        return 0;
 }
 
 /* Blit a 1bpp FB to a 32BPP RGBA output.  SDL2 doesn't appear to support
@@ -127,11 +245,14 @@ int     main(int argc, char *argv[])
         const char *scsi_filename = NULL;
         int scsi_id = -1;
         bool scsi_write = false;
+        const char *pram_filename = "pram.nv";
+        char *pram_path = NULL;
+        int pram_lock_fd = -1;
 
         ////////////////////////////////////////////////////////////////////////
         // Args
 
-        while ((ch = getopt(argc, argv, "r:d:W:s:t:ihwp")) != -1) {
+        while ((ch = getopt(argc, argv, "r:d:W:s:t:P:ihwp")) != -1) {
                 switch (ch) {
                 case 'r':
                         rom_filename = strdup(optarg);
@@ -169,6 +290,10 @@ int     main(int argc, char *argv[])
                         scsi_write = true;
                         break;
 
+                case 'P':
+                        pram_filename = optarg;
+                        break;
+
                 case 'h':
                 default:
                         print_help(argv[0]);
@@ -182,6 +307,65 @@ int     main(int argc, char *argv[])
         if (scsi_id == -1)
                 scsi_id = 1;
 
+        /* Resolve and validate the PRAM destination before any media or
+         * output file is opened.  This catches direct, symlink and hard-link
+         * aliases of the ROM, RAM, floppy, SCSI image or ROM dump. */
+        pram_path = canonical_path_for_create(pram_filename);
+        if (!pram_path) {
+                fprintf(stderr, "Invalid RTC/PRAM path '%s': %s\n",
+                        pram_filename, strerror(errno));
+                return 1;
+        }
+        const char *protected_paths[] = {
+                rom_filename, ram_filename, rom_dump_filename,
+                disc_filename, scsi_filename
+        };
+        const char *conflicting_path = NULL;
+        int conflict = reject_pram_aliases(pram_path, protected_paths,
+                                           sizeof(protected_paths) / sizeof(protected_paths[0]),
+                                           &conflicting_path);
+        if (conflict != 0) {
+                if (conflict > 0)
+                        fprintf(stderr, "RTC/PRAM path '%s' conflicts with media/output path '%s'\n",
+                                pram_filename, conflicting_path);
+                else
+                        fprintf(stderr, "Cannot validate RTC/PRAM path '%s': %s\n",
+                                pram_filename, strerror(errno));
+                free(pram_path);
+                return 1;
+        }
+
+        size_t lock_path_len = strlen(pram_path) + sizeof(".lock");
+        char *pram_lock_path = malloc(lock_path_len);
+        if (!pram_lock_path) {
+                fprintf(stderr, "Out of memory validating RTC/PRAM path\n");
+                free(pram_path);
+                return 1;
+        }
+        snprintf(pram_lock_path, lock_path_len, "%s.lock", pram_path);
+        conflict = reject_pram_aliases(pram_lock_path, protected_paths,
+                                       sizeof(protected_paths) / sizeof(protected_paths[0]),
+                                       &conflicting_path);
+        free(pram_lock_path);
+        if (conflict != 0) {
+                if (conflict > 0)
+                        fprintf(stderr, "RTC/PRAM lock path conflicts with media/output path '%s'\n",
+                                conflicting_path);
+                else
+                        fprintf(stderr, "Cannot validate RTC/PRAM lock path: %s\n",
+                                strerror(errno));
+                free(pram_path);
+                return 1;
+        }
+
+        int pram_state = rtc_pram_check(pram_path);
+        if (pram_state < 0) {
+                fprintf(stderr, "RTC/PRAM backing file '%s' is invalid or inaccessible: %s\n",
+                        pram_filename, strerror(errno));
+                free(pram_path);
+                return 1;
+        }
+
         ////////////////////////////////////////////////////////////////////////
         // Load memories/discs
 
@@ -189,6 +373,7 @@ int     main(int argc, char *argv[])
         ofd = open(rom_filename, O_RDONLY);
         if (ofd < 0) {
                 perror("ROM");
+                free(pram_path);
                 return 1;
         }
 
@@ -198,10 +383,12 @@ int     main(int argc, char *argv[])
         rom_base = mmap(0, _rom_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, ofd, 0);
         if (rom_base == MAP_FAILED) {
                 printf("Can't mmap ROM!\n");
+                free(pram_path);
                 return 1;
         }
         if (rom_patch(rom_base)) {
                 printf("Failed to patch ROM\n");
+                free(pram_path);
                 return 1;
         }
 
@@ -211,6 +398,7 @@ int     main(int argc, char *argv[])
         if (scsi_filename) {
                 if (scsi_image_open(&scsi_image, scsi_filename, scsi_write)) {
                         fprintf(stderr, "SCSI image '%s': %s\n", scsi_filename, strerror(errno));
+                        free(pram_path);
                         return 1;
                 }
                 if (same_file(scsi_image.fd, ram_filename) || same_file(scsi_image.fd, rom_filename) ||
@@ -221,6 +409,21 @@ int     main(int argc, char *argv[])
                 scsi_disk_init(&scsi_disk, &scsi_image.media);
                 printf("SCSI ID %d: '%s' (%s)\n", scsi_id, scsi_filename,
                        scsi_write ? "writable" : "read-only");
+        }
+
+        /* A sidecar flock stays attached to one stable inode while the
+         * PRAM data file is atomically replaced on save. */
+        pram_lock_fd = rtc_pram_lock(pram_path);
+        if (pram_lock_fd < 0) {
+                fprintf(stderr, "RTC/PRAM backing file '%s' is already in use or cannot be locked: %s\n",
+                        pram_filename, strerror(errno));
+                goto close_scsi;
+        }
+        pram_state = rtc_pram_check(pram_path);
+        if (pram_state < 0) {
+                fprintf(stderr, "RTC/PRAM backing file '%s' changed or became invalid: %s\n",
+                        pram_filename, strerror(errno));
+                goto close_scsi;
         }
 
         if (rom_dump_filename) {
@@ -335,6 +538,15 @@ int     main(int argc, char *argv[])
 
         umac_init(ram_base, rom_base, discs);
         umac_opt_disassemble(opt_disassemble);
+        pram_state = umac_rtc_load(pram_path);
+        if (pram_state < 0) {
+                fprintf(stderr, "Cannot load RTC/PRAM backing file '%s': %s\n",
+                        pram_filename, strerror(errno));
+                goto close_scsi;
+        }
+        if (pram_state == RTC_PRAM_MISSING)
+                printf("RTC/PRAM backing file '%s' will be created on clean exit\n",
+                       pram_filename);
         if (scsi_filename) {
                 struct scsi_target target = scsi_disk_target(&scsi_disk, scsi_id);
                 if (!ncr5380_attach(&target)) {
@@ -429,8 +641,15 @@ int     main(int argc, char *argv[])
                 }
         } while (!done);
 
+        if (umac_rtc_save(pram_path)) {
+                fprintf(stderr, "Cannot save RTC/PRAM backing file '%s': %s\n",
+                        pram_filename, strerror(errno));
+                result = 1;
+        } else {
+                result = 0;
+        }
+
         SDL_Quit();
-        result = 0;
 close_scsi:
         if (scsi_filename) {
                 ncr5380_attach(NULL);
@@ -439,5 +658,8 @@ close_scsi:
                         result = 1;
                 }
         }
+        if (pram_lock_fd >= 0)
+                close(pram_lock_fd);
+        free(pram_path);
         return result;
 }

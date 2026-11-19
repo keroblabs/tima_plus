@@ -36,6 +36,11 @@ void    umac_opt_disassemble(int enable);
 void    umac_mouse(int deltax, int deltay, int button);
 void    umac_kbd_event(uint8_t scancode, int down);
 
+/* RTC/PRAM persistence: load returns 0 for a valid file, 1 when missing,
+ * and -1 for invalid or inaccessible files; save returns 0 or -1. */
+int     umac_rtc_load(const char *path);
+int     umac_rtc_save(const char *path);
+
 static inline void      umac_vsync_event(void)
 {
         via_caX_event(2);

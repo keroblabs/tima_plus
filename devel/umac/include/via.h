@@ -35,6 +35,12 @@ struct via_cb {
         uint8_t (*rb_in)(void);
         void (*sr_tx)(uint8_t val);
         void (*irq_set)(int status);
+        /* Resolved Port B pin state change: invoked after an ORB or
+         * DDRB write with the current output latch (orb) and data
+         * direction register (ddrb).  Unlike rb_change this also fires
+         * on DDRB-only writes, so a direction-sensitive device (e.g.
+         * the RTC) sees PB0 turn-around. */
+        void (*rb_pins)(uint8_t orb, uint8_t ddrb);
 };
 
 void    via_init(struct via_cb *cb);
