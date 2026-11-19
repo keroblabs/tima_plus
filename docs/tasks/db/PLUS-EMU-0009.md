@@ -1,12 +1,12 @@
 # PLUS-EMU-0009 — Implement Macintosh Plus serial RTC and battery-backed PRAM
 
 **ID:** `PLUS-EMU-0009`  
-**Status:** `REVIEW`  
+**Status:** `IN_PROGRESS`  
 **Title:** Implement Macintosh Plus serial RTC and battery-backed PRAM
 
 **Description**
 
-At discovery, uMac had no Macintosh Plus real-time clock (RTC) or battery-backed parameter RAM behind VIA Port B. Commit `1bcf2fe` implemented that hardware path, and the project owner confirmed that uMac displayed a clock with a time that differed from Linux. The ROM trace identified a one-bit shift in each response byte. The correction is in review after verifying the guest clock against Linux. [Original implementation](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de)
+At discovery, uMac had no Macintosh Plus real-time clock (RTC) or battery-backed parameter RAM behind VIA Port B. Commit `1bcf2fe` implemented that hardware path, and the project owner confirmed that uMac displayed a clock with a time that differed from Linux. The ROM trace identified a one-bit shift in each response byte. The RTC/VIA timing correction has passed the recorded ROM and System Software verification. Subsequent engineering review found two outstanding **PRAM backing-file safety risks** (unvalidated/aliased destination and concurrent-instance collisions). The working serial RTC design and timing correction are acceptable; the ticket needs focused persistence rework before merge approval. [Original implementation](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de)
 
 The M0001AP is a Macintosh Plus and has a real RTC. The goal is a **Macintosh Plus–accurate, VIA-connected serial RTC**, taking its initial time from the Linux host clock, with a 32-bit seconds counter and **256 bytes of persistent PRAM**. This must be observable by the Mac Plus ROM through normal 6522 register accesses; it must not be a paravirtual date/time API, direct low-memory patch, or replacement of guest RTC routines.
 
@@ -180,6 +180,9 @@ Physical logic-analyzer timing remains **NOT TESTED** and belongs to [the hardwa
 | --- | --- | --- | --- | --- |
 | `EMU9-R1` | `CORRECTION_REQUIRED` | `rtc_begin_read()` in `1bcf2fe` puts bit 7 on PB0 early. The Plus V3 ROM changes DDRB to input, clocks PB1 low then high, and samples PB0 after the first falling edge has advanced to bit 6. The saved v1 PRAM has a zero guest adjustment. A fixed host timestamp gives `0xE724F800` in the RTC and `0xCF48F000` in the ROM's serial read. | Present bit 7 on the first response falling edge. Verify all eight bits using the ROM's VIA sequence and compare the guest clock with Linux. | `VERIFIED` in `df9bd44` by the regression tests, Plus V3 trace, and System 7.0.1 and 6.0.7 checks above. |
 
+| `EMU9-R2` | `CORRECTION_REQUIRED — BLOCKING` | `unix_main.c` accepts arbitrary `-P` paths; `umac_rtc_load()` ignores all load failures; `rtc_pram_save()` unconditionally renames `<path>.tmp` over the destination on normal exit. For example, `-P rom.bin` can replace the actual ROM image with a 272-byte PRAM file. The same risk applies to RAM/floppy/SCSI images and an existing malformed PRAM file. This is a code-path hazard; the reviewer did **not** destructively reproduce it. | Distinguish missing file from existing invalid/inaccessible PRAM; reject unsafe destinations and aliases of ROM/RAM/floppy/SCSI, propagate actionable failures to the front end, and never overwrite unrelated or unvalidated existing data. Add non-destructive negative tests proving a ROM image and a malformed PRAM file remain byte-for-byte unchanged on rejection, alongside first-boot/normal-restart tests. | `OPEN` — merge-blocking. |
+| `EMU9-R3` | `CORRECTION_REQUIRED — BLOCKING` | The default `pram.nv` lives in the working directory, with no inter-process coordination. `rtc_pram_save()` uses one fixed `<path>.tmp` filename and unconditional replacement. Two instances using the same directory/path can interfere, truncate the same temporary file, or silently lose one another's changes. This violates the per-instance/non-shared backing-file requirement; no destructive concurrent test was run. | Make concurrent use safe by explicit refusal/locking or per-instance isolation, and use a unique collision-resistant temporary file. Test a two-instance/conflicting-path scenario and confirm existing PRAM stays intact. Document whether save-on-exit alone is an accepted crash/power-loss durability limitation; implement `fsync`/directory synchronization if durability beyond normal exit is claimed. | `OPEN` — merge-blocking. |
+
 **Notes**
 
 - **2026-11-19 — Discovery:** Owner identified missing RTC after merging SCSI to `main` and created `rtc-implementation` from `main`; the branch was identical to `main` when inspected. Code review confirms the three RTC bits are noted but not implemented, and no PRAM backing or RTC serial counter exists. A synthetic 1 Hz VIA event already exists and must be preserved/integrated, not mistaken for the RTC.
@@ -206,18 +209,23 @@ Physical logic-analyzer timing remains **NOT TESTED** and belongs to [the hardwa
 
 - **2026-11-19 — Status change:** `IN_PROGRESS` → `REVIEW` with `EMU9-R1` verified. Recorded correction commit `df9bd44` as `UNREVIEWED`. Resolution is pending explicit acceptance.
 
+- **2026-11-19 — Project-owner review and manual verification:** Owner explicitly reported independently reviewing the code and being happy with it; the **System 6 Control Panel time matched the Linux host**. This owner-provided manual evidence supplements, but is distinct from, the recorded implementation-run automated and ROM tests.
+- **2026-11-19 — Independent engineering code review:** Reviewed the RTC serial state machine, time conversion, legacy/extended PRAM mapping, VIA Port B ORB/DDRB integration, Unix lifecycle, test sources and `df9bd44` corrective diff. The serial RTC implementation and `df9bd44` response-bit timing correction are accepted (that commit marked `APPROVED`). **No build or executable tests were run by this reviewer.** Found two merge-blocking PRAM persistence risks `EMU9-R2` and `EMU9-R3` detailed above, so `1bcf2fe` remains `CHANGES_REQUESTED`. These are static code-path findings, not claims that data loss was reproduced. Requested targeted persistence rework, not changes to the verified RTC hardware protocol. `REVIEW` → `IN_PROGRESS`; full approval and resolution remain pending.
+
 **Proposed Change**
 
 Introduce a dedicated, independently testable Macintosh Plus 256-byte RTC/PRAM device connected to the 6522 VIA Port B serial pins with proper DDR handling, command state machine, seconds-since-1904 counter based on Linux time, guest-settable time, persisted battery-backed PRAM/clock anchor, and coherent 1 Hz VIA notifications. Integrate without direct-ROM or low-memory shortcuts, retain patched uMac mode and SCSI/floppy compatibility, and satisfy the acceptance matrix above.
 
 For `EMU9-R1`, load the response byte at command completion and drive one bit on each subsequent falling edge of PB1, beginning with bit 7. Exercise the Plus ROM's DDRB turn-around and low/high/sample sequence in the VIA test. Compare the four serial bytes and the guest clock against Linux during boot.
 
+**Review-requested rework (`EMU9-R2`, `EMU9-R3`):** Preserve the successful RTC core, VIA and timing implementation. Validate and isolate `-P` backing paths so no existing non-PRAM file or disk/ROM/RAM image can be silently replaced; distinguish initial creation from invalid/corrupt file load, and report errors. Prevent concurrent instances from sharing/colliding on a backing file or fixed temporary path. Document durability expectations and add negative tests for rejection, collision and restart. Re-run RTC, VIA and SCSI tests and a ROM/System 6 clock smoke test before resubmitting.
+
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `rtc-implementation` | [`1bcf2fe`](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de) | `CHANGES_REQUESTED` | Serial RTC + 256-byte PRAM core, VIA integration, Unix persistence and headless tests |
-| `rtc-implementation` | `df9bd44` | `UNREVIEWED` | Correct RTC response bit timing and replay the Plus ROM's clock sequence in tests |
+| `rtc-implementation` | [`df9bd44`](https://github.com/keroblabs/tima_plus/commit/df9bd44e1733b423ed38fb5f396b68549a2cedf6) | `APPROVED` | Correct RTC response bit timing and replay the Plus ROM's clock sequence in tests; reviewed 2026-11-19 |
 
 **Resolution Description**
 
