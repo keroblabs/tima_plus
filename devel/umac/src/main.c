@@ -39,6 +39,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <setjmp.h>
+#include <time.h>
 
 #include "machw.h"
 #include "m68k.h"
@@ -47,6 +48,7 @@
 #include "rom.h"
 #include "disc.h"
 #include "scsi5380.h"
+#include "rtc.h"
 
 #ifdef PICO
 #include "pico.h"
@@ -140,6 +142,40 @@ void exit_error(char* fmt, ...)
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// RTC (serial real-time clock + battery-backed PRAM, behind VIA Port B)
+
+static rtc_t rtc;
+
+static int64_t rtc_host_time_cb(void *ctx)
+{
+        (void)ctx;
+        return (int64_t)time(NULL);
+}
+
+/* Resolved Port B pins: PB2=rtcEnb, PB1=rtcClk, PB0=rtcData.
+ * DDRB bit 0 selects whether the VIA drives PB0 (output) or the RTC
+ * may drive it (input). */
+static void     via_rtc_pins(uint8_t orb, uint8_t ddrb)
+{
+        int enb = (orb >> 2) & 1;
+        int clk = (orb >> 1) & 1;
+        int data = orb & 1;
+        int data_is_output = ddrb & 1;
+        rtc_via_update(&rtc, enb, clk, data, data_is_output);
+}
+
+/* Persistence hooks (used by the Unix front-end). */
+void    umac_rtc_load(const char *path)
+{
+        rtc_pram_load(&rtc, path);
+}
+
+int     umac_rtc_save(const char *path)
+{
+        return rtc_pram_save(&rtc, path);
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // VIA-related controls
 static void     via_ra_changed(uint8_t val)
 {
@@ -185,6 +221,8 @@ static uint8_t  via_rb_in(void)
         // Mouse not pressed!
         if (!via_mouse_pressed)
                 v |= (1 << 3);
+        // PB0 = RTC serial data (used by VIA only when PB0 is input)
+        v = (v & ~0x01) | (rtc_data_out(&rtc) & 1);
         return v;
 }
 
@@ -640,8 +678,12 @@ int     umac_init(void *ram_base, void *rom_base, disc_descr_t discs[DISC_NUM_DR
                               .rb_in = via_rb_in,
                               .sr_tx = via_sr_tx,
                               .irq_set = via_irq_set,
+                              .rb_pins = via_rtc_pins,
         };
         via_init(&vcb);
+        struct rtc_time_provider rtp = { .get_unix_seconds = rtc_host_time_cb,
+                                         .ctx = NULL };
+        rtc_init(&rtc, &rtp);
         struct scc_cb scb = { .irq_set = scc_irq_set,
         };
         scc_init(&scb);
@@ -749,6 +791,7 @@ void    umac_reset(void)
 {
         overlay = 1;
         ncr5380_reset();
+        rtc_reset(&rtc);
         m68k_pulse_reset();
 }
 

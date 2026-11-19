@@ -56,6 +56,7 @@ static void     print_help(char *n)
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
+               "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
                "\t-i\t\t\tDisassembled instruction trace\n", n);
 }
 
@@ -127,11 +128,12 @@ int     main(int argc, char *argv[])
         const char *scsi_filename = NULL;
         int scsi_id = -1;
         bool scsi_write = false;
+        const char *pram_filename = "pram.nv";
 
         ////////////////////////////////////////////////////////////////////////
         // Args
 
-        while ((ch = getopt(argc, argv, "r:d:W:s:t:ihwp")) != -1) {
+        while ((ch = getopt(argc, argv, "r:d:W:s:t:P:ihwp")) != -1) {
                 switch (ch) {
                 case 'r':
                         rom_filename = strdup(optarg);
@@ -167,6 +169,10 @@ int     main(int argc, char *argv[])
 
                 case 'p':
                         scsi_write = true;
+                        break;
+
+                case 'P':
+                        pram_filename = optarg;
                         break;
 
                 case 'h':
@@ -335,6 +341,7 @@ int     main(int argc, char *argv[])
 
         umac_init(ram_base, rom_base, discs);
         umac_opt_disassemble(opt_disassemble);
+        umac_rtc_load(pram_filename);
         if (scsi_filename) {
                 struct scsi_target target = scsi_disk_target(&scsi_disk, scsi_id);
                 if (!ncr5380_attach(&target)) {
@@ -428,6 +435,10 @@ int     main(int argc, char *argv[])
                         last_1hz = now_usec;
                 }
         } while (!done);
+
+        if (umac_rtc_save(pram_filename))
+                fprintf(stderr, "Warning: could not save PRAM to '%s'\n",
+                        pram_filename);
 
         SDL_Quit();
         result = 0;

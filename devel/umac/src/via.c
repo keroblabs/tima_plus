@@ -201,7 +201,7 @@ void    via_write(unsigned int address, uint8_t data)
         case VIA_DDRA:
                 break; // FIXME
         case VIA_DDRB:
-                break; // FIXME
+                break; // Stored below; rb_pins notified after store.
         case VIA_SR:
                 via_update_sr(data);
                 dowrite = 0;
@@ -230,6 +230,13 @@ void    via_write(unsigned int address, uint8_t data)
 
         if (dowrite)
                 via_regs[r] = data;
+
+        /* Notify a direction-sensitive Port B device of resolved pin
+         * state on ORB or DDRB writes (fires even on DDRB-only
+         * changes, which rb_change does not). */
+        if ((r == VIA_RB || r == VIA_DDRB) && via_callbacks.rb_pins)
+                via_callbacks.rb_pins(via_regs[VIA_RB], via_regs[VIA_DDRB]);
+
         via_assess_irq();
 }
 

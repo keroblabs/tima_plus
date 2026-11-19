@@ -37,6 +37,7 @@ add_library(umac_core STATIC
     src/disc.c
     src/main.c
     src/rom.c
+    src/rtc.c
     src/scc.c
     src/scsi5380.c
     src/scsi_disk.c
@@ -81,6 +82,16 @@ if(BUILD_TESTING)
     target_link_libraries(umac_scsi_test PRIVATE umac_core)
     add_test(NAME scsi_controller COMMAND umac_scsi_test controller)
     add_test(NAME scsi_disk COMMAND umac_scsi_test disk)
+
+    add_executable(umac_rtc_test tests/test_rtc.c)
+    target_compile_options(umac_rtc_test PRIVATE -Wall -Wextra -pedantic)
+    target_link_libraries(umac_rtc_test PRIVATE umac_core)
+    add_test(NAME rtc_core COMMAND umac_rtc_test)
+
+    add_executable(umac_via_rtc_test tests/test_via_rtc.c)
+    target_compile_options(umac_via_rtc_test PRIVATE -Wall -Wextra -pedantic)
+    target_link_libraries(umac_via_rtc_test PRIVATE umac_core)
+    add_test(NAME via_rtc COMMAND umac_via_rtc_test)
     set(UMAC_TEST_PLUS_ROM "" CACHE FILEPATH "User-supplied Mac Plus V3 ROM for the SCSI Manager test")
     if(UMAC_TEST_PLUS_ROM)
         add_test(NAME scsi_plus_rom COMMAND umac_scsi_test rom "${UMAC_TEST_PLUS_ROM}")

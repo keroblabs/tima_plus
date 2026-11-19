@@ -36,6 +36,11 @@ void    umac_opt_disassemble(int enable);
 void    umac_mouse(int deltax, int deltay, int button);
 void    umac_kbd_event(uint8_t scancode, int down);
 
+/* RTC/PRAM persistence: load restores PRAM + guest clock offset from a
+ * backing file (ignored if missing/invalid); save writes it back. */
+void    umac_rtc_load(const char *path);
+int     umac_rtc_save(const char *path);
+
 static inline void      umac_vsync_event(void)
 {
         via_caX_event(2);
