@@ -32,6 +32,8 @@ The M0001AP is a Macintosh Plus and has a real RTC. The goal is a **Macintosh Pl
 
 ### 2. Macintosh Plus hardware contract
 
+**Developer component reference:** [Apple 343-0042-B RTC — serial command/register and PRAM map](343-0042-B-RTC-PRAM-reference.md). This self-contained reference identifies the RTC family, VIA register addresses and pins, canonical command bytes, legacy/extended PRAM alias mapping, write protection, time-counter byte order, and known emulator-source discrepancies. Use it for implementation; refer to external manuals only for further corroboration.
+
 The standard Macintosh Plus has a separate Apple serial clock/PRAM IC in the 256-byte family (commonly identified as **343-0042-B**), interfaced through its **single Rockwell/VII 6522 VIA**. Earlier 128K/512K machines used the 20-byte predecessor; do **not** accidentally emulate that smaller model for the Plus.
 
 | VIA Port B | Direction | Meaning |
@@ -45,7 +47,7 @@ The standard Macintosh Plus has a separate Apple serial clock/PRAM IC in the 256
 - Model command framing, serial clock transitions, sampling/output timing, chip-select assertion/deassertion, partial transactions, and read-data validity at the software-visible pin level. MAME's early-Mac RTC model samples/advances on the **high-to-low clock transition**; confirm observable start/finish/read alignment using the Mac Plus ROM before fixing test vectors. Do not implement a byte-level shortcut that ignores VIA bit transitions.
 - Map legacy seconds registers 0–3 (and documented aliases), the legacy-accessible 20 PRAM bytes, write-protect register, and the **extended address protocol for all 256 PRAM bytes**. Correctly implement the overlap/alias of legacy and extended PRAM addressing, not two disconnected stores. Decode direction, legal commands, and write-protect effects; avoid speculative undocumented chip commands. Test-mode register handling can be limited to explicitly documented software-observable behaviour, with any unsupported diagnostic-clock acceleration called out.
 - The clock is a **32-bit seconds-since-1904-01-01 00:00:00** counter, not Unix seconds, BCD fields, or 1970 epoch. Linux UTC epoch -> classic Mac epoch offset is **2,082,844,800 seconds**. Use 64-bit internal arithmetic and explicitly encode the 32-bit hardware wrap (the classic 2040 limitation); never truncate the Linux `time_t` before conversion.
-- The real RTC generates one one-second signal into the VIA (CA1/IFR bit 0). Preserve the existing interrupt wiring, enable/mask semantics and unrelated CA2/VBL/keyboard events. Coordinate this periodic event with the chosen clock source and avoid double-generating an RTC 1 Hz interrupt.
+- The real RTC generates a one-second signal visible at VIA **IFR bit 0** (not to be confused with the 6522 pin naming in our helper functions). Preserve the existing interrupt wiring, enable/mask semantics and unrelated CA2/VBL/keyboard events. Coordinate this periodic event with the chosen clock source and avoid double-generating an RTC 1 Hz interrupt.
 - Do not infer that host time zone equals an RTC wire-format field. Clock is elapsed seconds; System Software/PRAM governs display preferences.
 
 **Reference evidence:** Apple, *Guide to the Macintosh Family Hardware*, 2nd ed., Chapter 2 (RTC/PRAM), Chapter 3 pp. 144–146 (RTC pins, 32-bit count, 1 Hz interrupt), Chapter 4 Table 4-11 (classic Mac VIA PB0–PB2), Appendix A (Plus 256-byte PRAM):  
@@ -78,12 +80,12 @@ Suggested implementation (names may change after design review):
 | Area | Required evidence |
 | --- | --- |
 | Pin wiring/DDR | Tests write ORB/DDRB, assert/deassert active-low PB2, clock PB1 and read PB0. Input reads return RTC bit only in input direction; output reads preserve VIA latch semantics; PB3–PB7 and mouse/keyboard behaviour unaffected. |
-| Serial framing | MSB-first command + data read/write, clock edge/turnaround, aborted/incomplete transaction, selection reset and repeated transfers, including a ROM-observed command such as `0xC1`. |
+| Serial framing | MSB-first command + data read/write, clock edge/turnaround, aborted/incomplete transaction, selection reset and repeated transfers, including the ROM-observed `0xC1` (**read PRAM byte 0x00**, not a seconds-register read) and `0x81` (**read seconds byte 0**). |
 | Clock read | Fixed injected Linux UTC timestamp yields correct four Mac-epoch bytes, stable repeated reads, progression across seconds, no BCD/localtime conversion, 32-bit boundary/wrap test. |
 | Clock write | Guest serial writes update readback and continue counting, including bytewise writes and write protection; host clock remains unchanged. |
 | PRAM commands | Legacy 20-byte aliases and extended 256-byte addressing, boundary addresses `0x00`, `0x13`, `0x1F`, `0x20`, `0xFF`, independent values and read/write protect. |
 | PRAM persistence | Missing-file/cold-start, normal exit/restart, warm reset, multiple clean launches, corrupt/truncated backing, read-only/error paths, and separate emulator instances. |
-| IRQ/time | Existing CA1 1 Hz / IFR / IER behaviour verified with controlled time advancement. No duplicate pulses; VBL and keyboard interrupts remain operational. |
+| IRQ/time | Existing 1 Hz / IFR bit 0 / IER bit 0 behaviour verified with controlled time advancement. No duplicate pulses; VBL and keyboard interrupts remain operational. |
 | ROM integration | Capture genuine Plus ROM RTC pin transactions and verify decoded commands/data. Inspect guest Date & Time / Control Panel and PRAM setting retention using available System Software; distinguish **manual** verification from automated. |
 | Regressions | Build with warnings, add headless RTC test target, pass existing SCSI controller/disk tests, and repeat SCSI+floppy boot smoke test with RTC enabled. Do not claim an unpatched-ROM IWM boot until that separate milestone actually works. |
 
@@ -102,6 +104,8 @@ Record exact commands, test fixtures, host time source, expected/observed RTC by
 - **2026-11-19 — Discovery:** Owner identified missing RTC after merging SCSI to `main` and created `rtc-implementation` from `main`; the branch was identical to `main` when inspected. Code review confirms the three RTC bits are noted but not implemented, and no PRAM backing or RTC serial counter exists. A synthetic 1 Hz VIA event already exists and must be preserved/integrated, not mistaken for the RTC.
 - **2026-11-19 — Hardware investigation:** Apple hardware reference confirms the 6522 Port B PB0/PB1/PB2 interface, 4-byte 1904-epoch counter, 1 Hz VIA interrupt and **256-byte Plus PRAM**. MAME and Linux implementations provide useful protocol cross-checks; exact edge/command tolerance must be validated with Plus ROM. No emulator implementation or tests were performed as part of ticket creation.
 - **2026-11-19 — Scope proposal:** One focused `BUG` ticket for RTC+PRAM hardware capability, proposed `PLUS-EMU-0009`, linked to the existing hardware-profile milestone. **OPEN for triage/design approval**, not authorization to implement.
+
+- **2026-11-19 — Developer component reference and command clarification:** Added [343-0042-B RTC/PRAM reference](343-0042-B-RTC-PRAM-reference.md) with canonical regular and extended command tables and logical PRAM addressing. Clarified that `0xC1` reads PRAM offset `0x00`, whereas `0x81` reads seconds byte 0; distinguished the one-second VIA **IFR bit 0** from the code's helper-function CA naming. These corrections preserve the original discovery record. No emulator code or tests changed.
 
 **Proposed Change**
 
