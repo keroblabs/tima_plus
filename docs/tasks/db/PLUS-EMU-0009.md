@@ -225,6 +225,7 @@ Persistence now distinguishes a missing file (`RTC_PRAM_MISSING`, eligible for f
 - **2026-11-19 — Rework:** Added strict PRAM path and file validation, surfaced load/save failures, rejected aliases of configured media/output files, and added a lifetime sidecar `flock`. Replaced the fixed temporary filename with `mkstemp`; file contents and the parent directory are synced around the atomic rename. Existing malformed state is never replaced. The RTC wire protocol and timing correction were left unchanged.
 - **2026-11-19 — Rework verification:** The isolated Debug build with `UMAC_TEST_PLUS_ROM` configured passed all six CTest cases, including new non-destructive ROM/RAM/malformed-file rejection checks, cross-process lock collision refusal, save/reload, RTC/VIA and SCSI. An offscreen SCSI-only launch sampled the Mac low-memory clock at `$020C`; the value was four seconds behind the Linux-derived target at that sample. It was terminated after 45 seconds and the Control Panel was not observed in this run; prior recorded System 6 Control Panel evidence remains in Details. Build output contained only existing Musashi unused-variable warnings.
 - **2026-11-19 — Status change:** `IN_PROGRESS` → `REVIEW` after the requested persistence corrections and verification. The new code changes are currently in the working tree and do not yet have an implementation commit row. `EMU9-R2` and `EMU9-R3` are marked `VERIFIED` by the recorded evidence; explicit review approval and ticket resolution remain pending.
+- **2026-11-19 — Commit tracking:** Recorded implementation commit `8e1a265` on `rtc-implementation` as `UNREVIEWED`. Its six-test verification and offscreen clock smoke evidence are recorded above; explicit review approval remains pending.
 
 **Proposed Change**
 
@@ -240,6 +241,7 @@ For `EMU9-R1`, load the response byte at command completion and drive one bit on
 | --- | --- | --- | --- |
 | `rtc-implementation` | [`1bcf2fe`](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de) | `CHANGES_REQUESTED` | Serial RTC + 256-byte PRAM core, VIA integration, Unix persistence and headless tests |
 | `rtc-implementation` | [`df9bd44`](https://github.com/keroblabs/tima_plus/commit/df9bd44e1733b423ed38fb5f396b68549a2cedf6) | `APPROVED` | Correct RTC response bit timing and replay the Plus ROM's clock sequence in tests; reviewed 2026-11-19 |
+| `rtc-implementation` | [`8e1a265`](https://github.com/keroblabs/tima_plus/commit/8e1a265d1f818d703f82bd345fd538c896b8114e) | `UNREVIEWED` | Harden PRAM path validation, process locking and durable atomic saves; add safety regressions |
 
 **Resolution Description**
 
