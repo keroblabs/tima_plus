@@ -1,7 +1,7 @@
 
 # Tima/Plus — IWM Emulation Architecture and Behaviour
 
-**Status:** Two-phase architecture approved; detailed Macintosh Plus-specific implementation guide added for review; implementation pending
+**Status:** Two-phase architecture approved. The read-only implementation and verification are recorded in [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md).
 **Recorded:** 19 November 2026; read-only/write implementation split approved 19 November 2026
 **Target:** Macintosh Plus M0001AP, original MC68000, original IWM and unmodified Macintosh Plus ROM
 **Implementation tickets:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) (Phase 1: read-only) and [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) (Phase 2: writes)  
@@ -12,7 +12,7 @@
 
 This document records the IWM discussions of 18–19 November 2026 and the subsequently approved **two-component, two-phase virtual floppy** plan. It supersedes earlier sequencing assumptions requiring STM32F411/Unicorn or a physical drive emulator before original-ROM virtual-floppy boot. The companion roadmap documents have not yet been reconciled with this updated sequencing.
 
-1. **Two software components:** a register/timing-oriented **IWM behaviour model** (`iwm.c/.h`) and an independent **virtual disk/drive model** (`floppy_drive.c/.h`). Their names and API signatures are proposed, not mandatory pre-existing files.
+1. **Two software components:** a register/timing-oriented **IWM behaviour model** (`iwm.c/.h`) and an independent **virtual disk/drive model** (`disk_img.c/.h`).
 2. **Phase 1 — `PLUS-EMU-0003`: read-only.** Disable ROM patching in the authentic execution path, execute the unmodified Macintosh Plus ROM and its own `.Sony` driver; implement the software-visible IWM read/control behaviour, drive control/sense, and a circular encoded track buffer populated from a standard 800K logical `.dsk` using 6-and-2 packing and GCR codeword mapping. **Stub the IWM/disk write path:** no track modification, no persistence and no claim of write support. Present the mounted medium as write-protected during this phase.
 3. **Phase 2 — `PLUS-EMU-0010`: write-capable.** Implement real IWM write-handshake/buffering and overwrite the circular track stream at its current bit position. Mark changed tracks dirty. On stepping to a different track or changing head/side, decode and validate changes, reverse GCR and 6-and-2, and store modified logical sectors back into the `.dsk`. Also flush safely on eject, medium replacement and orderly shutdown; avoid writes when the track is clean.
 4. **The IWM is an independent time-driven register device.** It owns Q6/Q7, mode, latch/rearm, register reads/writes and any hardware-equivalent handshakes; it does not decode disk sectors or access `.dsk` files.
@@ -42,7 +42,7 @@ Preserve the existing paravirtual `.Sony` implementation only as an **explicitly
           + drive controls / sense values
                          |
            +-------------v--------------+
-           | floppy_drive.c / .h        |
+           | disk_img.c / .h            |
            | Track/side, selection,     |
            | circular bit buffer,      |
            | bit phase, dirty flag      |
@@ -201,7 +201,7 @@ void m68k_end_timeslice(void);
 
 The implementation accounts for instruction costs and execution-slice cycles; it **does not guarantee the exact physical bus cycle of an IWM memory callback**. In particular, the base instruction cost is deducted after executing the instruction handler; additional cycle adjustments may occur within instruction handlers. The Macintosh-specific video/sound/PAL wait states are not currently modelled by uMac. Do not assume `m68k_cycles_run()` in the callback alone supplies precise intra-instruction bus timing.
 
-Current uMac uses an approximately 5-ms frontend execution quantum and `m68k_execute(us * 8)` followed by `global_time_us += us`. That is a coarse 8-MHz approximation, **not** a suitable independent IWM clock. Replace or augment it with a clock-driven model using **actual consumed virtual cycles**, explicit bus-wait accounting where required and monotonic timestamps across timeslices; avoid cumulative rounding drift.
+Before PLUS-EMU-0003, uMac advanced time in fixed 5-ms execution quanta. The IWM implementation uses consumed C8M cycles, modeled bus waits and access timestamps across slices. The ticket records the observed callback offsets and the timing approximations.
 
 First test the access-phase accuracy experimentally with original ROM polling loops; only then decide whether a Musashi timing hook/core change is needed. Preserve the existing practical frontend batch size if accurate peripheral timestamps can be obtained without reducing execution to single-cycle steps.
 
@@ -423,7 +423,7 @@ typedef struct {
 } sony_drive_t;
 ```
 
-`iwm.c` owns PH0–PH3, Q6/Q7, mode and IWM drive-enable selection; `floppy_drive.c` owns the above Sony controls, cylinder/side, track stream and image. **Do not duplicate an unrelated “enabled spindle” flag**: IWM /ENBL and Sony MOTORON are distinct, but related.
+`iwm.c` owns PH0–PH3, Q6/Q7, mode and IWM drive-enable selection. `disk_img.c` owns the Sony controls, cylinder, side, track stream and image. IWM /ENBL selects and enables the drive interface. Sony MOTORON controls the spindle.
 
 **One accepted STEP command** (command index 2, value 0, PH3 rising, selected drive enabled, not busy):
 

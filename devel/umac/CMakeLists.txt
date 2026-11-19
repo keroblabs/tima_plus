@@ -5,8 +5,6 @@ project(${PROJECT_NAME} LANGUAGES C)
 include(CTest)
 
 set(MEMSIZE "4096" CACHE STRING "Emulated RAM size in KiB")
-set(DISP_WIDTH "512" CACHE STRING "Display width in pixels")
-set(DISP_HEIGHT "342" CACHE STRING "Display height in pixels")
 
 find_package(SDL2 CONFIG REQUIRED)
 
@@ -34,7 +32,8 @@ add_custom_command(
 )
 
 add_library(umac_core STATIC
-    src/disc.c
+    src/disk_img.c
+    src/iwm.c
     src/main.c
     src/rom.c
     src/rtc.c
@@ -64,8 +63,6 @@ target_compile_definitions(umac_core PRIVATE
     "MUSASHI_CNF=\"${CMAKE_CURRENT_SOURCE_DIR}/include/m68kconf.h\""
     PUBLIC
     "UMAC_MEMSIZE=${MEMSIZE}"
-    "DISP_WIDTH=${DISP_WIDTH}"
-    "DISP_HEIGHT=${DISP_HEIGHT}"
     #"$<$<CONFIG:Debug>:DEBUG>"
 )
 
@@ -77,6 +74,17 @@ target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -pedantic "$<$<CONF
 target_link_libraries(${PROJECT_NAME} PRIVATE umac_core SDL2::SDL2)
 
 if(BUILD_TESTING)
+    add_executable(umac_iwm_test tests/test_iwm.c)
+    target_compile_options(umac_iwm_test PRIVATE -Wall -Wextra -pedantic)
+    target_link_libraries(umac_iwm_test PRIVATE umac_core)
+    add_test(NAME iwm_controller COMMAND umac_iwm_test controller)
+    add_test(NAME iwm_disk_image COMMAND umac_iwm_test disk)
+    add_test(NAME iwm_media_protection
+        COMMAND ${CMAKE_COMMAND}
+            -DUMAC=$<TARGET_FILE:umac>
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/iwm_media_protection
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_iwm_media.cmake)
+
     add_executable(umac_scsi_test tests/test_scsi.c)
     target_compile_options(umac_scsi_test PRIVATE -Wall -Wextra -pedantic)
     target_link_libraries(umac_scsi_test PRIVATE umac_core)
@@ -99,8 +107,16 @@ if(BUILD_TESTING)
             -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/rtc_pram_safety
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pram_safety.cmake)
 
-    set(UMAC_TEST_PLUS_ROM "" CACHE FILEPATH "User-supplied Mac Plus V3 ROM for the SCSI Manager test")
+    set(UMAC_TEST_PLUS_ROM "" CACHE FILEPATH "User-supplied Mac Plus V3 ROM for integration tests")
+    set(UMAC_TEST_PLUS_FLOPPY "" CACHE FILEPATH "User-supplied bootable raw 800K System Tools floppy")
     if(UMAC_TEST_PLUS_ROM)
         add_test(NAME scsi_plus_rom COMMAND umac_scsi_test rom "${UMAC_TEST_PLUS_ROM}")
+        if(UMAC_TEST_PLUS_FLOPPY)
+            add_executable(umac_iwm_rom_test tests/test_iwm_rom.c)
+            target_compile_options(umac_iwm_rom_test PRIVATE -Wall -Wextra -pedantic)
+            target_link_libraries(umac_iwm_rom_test PRIVATE umac_core)
+            add_test(NAME iwm_plus_rom_boot
+                     COMMAND umac_iwm_rom_test "${UMAC_TEST_PLUS_ROM}" "${UMAC_TEST_PLUS_FLOPPY}")
+        endif()
     endif()
 endif()

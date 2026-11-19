@@ -25,14 +25,18 @@
 #ifndef UMAC_H
 #define UMAC_H
 
-#include "disc.h"
+#include <stdio.h>
+#include "disk_img.h"
 #include "via.h"
 #include "machw.h"
 
-int     umac_init(void *_ram_base, void *_rom_base, disc_descr_t discs[DISC_NUM_DRIVES]);
+/* RAM, ROM and the internal drive remain owned by the caller. */
+int     umac_init(void *ram_base, const void *rom_base, struct disk_img *internal_floppy);
 int     umac_loop(void);
 void    umac_reset(void);
+uint64_t umac_ticks(void);
 void    umac_opt_disassemble(int enable);
+void    umac_iwm_trace(FILE *stream);
 void    umac_mouse(int deltax, int deltay, int button);
 void    umac_kbd_event(uint8_t scancode, int down);
 
@@ -55,7 +59,7 @@ static inline void      umac_1hz_event(void)
 static inline unsigned int      umac_get_fb_offset(void)
 {
         /* FIXME: Implement VIA RA6/vid.pg2 */
-        return RAM_SIZE - ((DISP_WIDTH * DISP_HEIGHT / 8) + 0x380);
+        return RAM_SIZE - ((MAC_SCREEN_WIDTH * MAC_SCREEN_HEIGHT / 8) + 0x380);
 }
 
 #endif

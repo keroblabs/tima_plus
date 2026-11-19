@@ -26,9 +26,11 @@
 #define ROM_H
 
 #define ROM_SIZE        0x20000         /* Real mapping size */
+#define ROM_PLUS_V3_CHECKSUM UINT32_C(0x4d1f8172)
 
+#include <stdbool.h>
 #include <inttypes.h>
 
-int      rom_patch(uint8_t *rom_base);
+bool rom_is_plus_v3(const uint8_t *rom);
 
 #endif

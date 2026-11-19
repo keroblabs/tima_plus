@@ -34,7 +34,13 @@
 #define RAM_SIZE        (1024*UMAC_MEMSIZE)
 #define RAM_HIGH_ADDR   0x600000
 
-#define PV_SONY_ADDR    0xc00069        /* Magic address for replacement driver PV ops */
+#define MAC_C8M_HZ      UINT64_C(7833600)
+#define MAC_VIA_DIVISOR 10u
+#define MAC_LINE_TICKS  352u
+#define MAC_FRAME_TICKS (370u * MAC_LINE_TICKS)
+#define MAC_SCREEN_WIDTH  512
+#define MAC_SCREEN_HEIGHT 342
+#define IWM_BASE        0xdfe1ffu
 
 ////////////////////////////////////////////////////////////////////////////////
 // RAM accessors
@@ -42,14 +48,14 @@
 // This isn't a wonderful place, but RAM access is needed in various files.
 
 extern uint8_t *_ram_base;
-extern uint8_t *_rom_base;
+extern const uint8_t *_rom_base;
 
 static inline uint8_t *ram_get_base(void)
 {
         return _ram_base;
 }
 
-static inline uint8_t *rom_get_base(void)
+static inline const uint8_t *rom_get_base(void)
 {
         return _rom_base;
 }
@@ -84,7 +90,7 @@ extern int overlay;
 #define CLAMP_RAM_ADDR(x) ((x) >= RAM_SIZE ? (x) % RAM_SIZE : (x))
 
 #define IS_VIA(x)       ((ADR24(x) & 0xe80000) == 0xe80000)
-#define IS_IWM(x)       ((ADR24(x) >= 0xdfe1ff) && (ADR24(x) < (0xdfe1ff + 0x2000)))
+#define IS_IWM(x)       ((ADR24(x) & 0xffe000) == (IWM_BASE & 0xffe000))
 #define IS_SCC_RD(x)    ((ADR24(x) & 0xf00000) == 0x900000)
 #define IS_SCC_WR(x)    ((ADR24(x) & 0xf00000) == 0xb00000)
 #define IS_SCSI(x)      ((ADR24(x) & 0xf80000) == 0x580000)
@@ -98,11 +104,11 @@ extern int overlay;
 #define READ_BYTE(BASE, ADDR)           (BASE)[ADDR]
 #define READ_WORD(BASE, ADDR)           (((BASE)[ADDR]<<8) |            \
                                          (BASE)[(ADDR)+1])
-#define READ_LONG(BASE, ADDR)           (((BASE)[ADDR]<<24) |           \
+#define READ_LONG(BASE, ADDR)           (((uint32_t)(BASE)[ADDR]<<24) | \
                                          ((BASE)[(ADDR)+1]<<16) |       \
                                          ((BASE)[(ADDR)+2]<<8) |        \
                                          (BASE)[(ADDR)+3])
-#define READ_WORD_AL(BASE, ADDR)         (__builtin_bswap16(*(uint16_t *)&(BASE)[(ADDR)]))
+#define READ_WORD_AL(BASE, ADDR)         (__builtin_bswap16(*(const uint16_t *)&(BASE)[(ADDR)]))
 
 #define WRITE_BYTE(BASE, ADDR, VAL)     do { \
                 (BASE)[ADDR] = (VAL)&0xff;   \

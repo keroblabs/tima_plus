@@ -41,12 +41,14 @@ struct via_cb {
          * on DDRB-only writes, so a direction-sensitive device (e.g.
          * the RTC) sees PB0 turn-around. */
         void (*rb_pins)(uint8_t orb, uint8_t ddrb);
+        void (*ra_pins)(uint8_t ora, uint8_t ddra);
 };
 
 void    via_init(struct via_cb *cb);
 void    via_write(unsigned int address, uint8_t data);
 uint8_t via_read(unsigned int address);
-void    via_tick(uint64_t time);
+void    via_advance(uint64_t c8m_ticks);
+uint64_t via_next_timer_irq(void);
 /* Trigger an event on CA1 or CA2: */
 void    via_caX_event(int ca);
 void    via_sr_rx(uint8_t val);

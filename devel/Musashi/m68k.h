@@ -336,6 +336,7 @@ int m68k_execute(int num_cycles);
  */
 int m68k_cycles_run(void);              /* Number of cycles run so far */
 int m68k_cycles_remaining(void);        /* Number of cycles left */
+void m68k_add_wait_cycles(int cycles);   /* Charge bus wait states to execution time. */
 void m68k_modify_timeslice(int cycles); /* Modify cycles left */
 void m68k_end_timeslice(void);          /* End timeslice now */
 
