@@ -82,7 +82,9 @@ Protocol obligations:
 5. Deassert PB2 high. A premature deselect discards the incomplete command; the next select begins a new command.
 6. Preserve non-RTC Port B outputs and the rest of DDRB throughout.
 
-**Sampling-edge caution:** MAME's serial RTC device advances its internal shift logic on **clock falling edges** and states that read output is valid after the fall; the inspected QEMU VIA model collects guest **write bits on rising edges** and updates guest **read bits on falling edges**. A Macintosh Plus ROM read/write trace must determine the correct pin-level timing and the first read bit at the output turn-around. This is an **explicit verification item**, not permission to skip edge-accurate behaviour.
+**Sampling-edge cross-check:** MAME's serial RTC shifts on **clock falling edges** and makes read output valid after the fall. The inspected QEMU VIA model collects guest writes on rising edges and updates guest read bits on falling edges.
+
+**Plus V3 ROM in uMac:** The ROM changes PB0 to input while PB1 is high, drives PB1 low then high, and reads PB0. The RTC drives response bit 7 on the first falling edge and bits 6 through 0 on the next seven falling edges. [ROM trace and regression evidence](PLUS-EMU-0009.md#verification-evidence-for-the-clock-correction-19-november-2026)
 
 ## 4. One-byte command format (register and first 20 PRAM bytes)
 
@@ -281,4 +283,6 @@ These are **reference vectors**, not claims of tests already run:
 - Linux/m68k, VIA RTC/PRAM accesses and canonical extended command construction: https://codebrowser.dev/linux/linux/arch/m68k/mac/misc.c.html
 - Independently maintained Macintosh Plus ROM disassembly with startup commands and bit-banged I/O: https://github.com/jonathanschilling/mac_rom/blob/main/plus/boot/vectors.s
 
-**Verified by source inspection:** 343-0042-B-class device selection; 256-byte capacity; VIA PB2/PB1/PB0 interface; 32-bit 1904-epoch clock; serial single/extended read-write command patterns; logical legacy PRAM range `00..13`; IFR bit 0 one-second source. **Not verified by running software or physical capture:** exact first-bit edge alignment in uMac, full undocumented test-mode effects, write-protect edge cases on a physical IC, and original Plus ROM/System Software acceptance. These remain explicit tests under PLUS-EMU-0009.
+**Verified by source inspection:** 343-0042-B-class device selection; 256-byte capacity; VIA PB2/PB1/PB0 interface; 32-bit 1904-epoch clock; serial single/extended read-write command patterns; logical legacy PRAM range `00..13`; IFR bit 0 one-second source.
+
+**Verified in uMac:** Plus V3 first-bit response timing, System Software clock reads, and retention of a guest-set clock adjustment and a PRAM setting. Physical first-bit timing, undocumented test-mode effects, and physical write-protect edge cases remain **NOT TESTED**. [Verification evidence](PLUS-EMU-0009.md#verification-evidence-for-the-clock-correction-19-november-2026)

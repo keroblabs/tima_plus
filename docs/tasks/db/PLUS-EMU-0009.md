@@ -6,7 +6,7 @@
 
 **Description**
 
-The `rtc-implementation` branch (created from `main` after the approved SCSI controller/disk merge) has **no emulation of the Macintosh Plus real-time clock (RTC) device**. uMac exposes a VIA Port B interface but does not connect its RTC control/data pins to any serial device or maintain an RTC seconds counter and battery-backed parameter RAM. As a result, ROM/System Software cannot read or set the machine clock through the authentic hardware interface or persist its control-panel settings through power cycles. This is a **confirmed missing capability in the upstream-minimalist uMac-derived emulator**, not a regression introduced by the recent SCSI work.
+At discovery, uMac had no Macintosh Plus real-time clock (RTC) or battery-backed parameter RAM behind VIA Port B. Commit `1bcf2fe` implemented that hardware path, and the project owner confirmed that uMac displayed a clock with a time that differed from Linux. The ROM trace identified a one-bit shift in each response byte. The correction is in review after verifying the guest clock against Linux. [Original implementation](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de)
 
 The M0001AP is a Macintosh Plus and has a real RTC. The goal is a **Macintosh Plus–accurate, VIA-connected serial RTC**, taking its initial time from the Linux host clock, with a 32-bit seconds counter and **256 bytes of persistent PRAM**. This must be observable by the Mac Plus ROM through normal 6522 register accesses; it must not be a paravirtual date/time API, direct low-memory patch, or replacement of guest RTC routines.
 
@@ -19,7 +19,7 @@ The M0001AP is a Macintosh Plus and has a real RTC. The goal is a **Macintosh Pl
 - **Branch inspected:** `rtc-implementation`, at base commit `7f6ed0871ec798db5379b199ced83ba4f2fcd2d9` (identical to `main` at discovery).
 - **Scope boundary:** RTC serial device, VIA pin connection, Linux-time abstraction, 256-byte PRAM persistence, and focused verification. Not a full rewrite of the 6522 VIA, an IWM implementation, a new guest OS time service, a host RTC driver, or restoration of every unrelated VIA timer.
 
-### 1. Confirmed code evidence (19 November 2026)
+### 1. Confirmed code evidence at discovery (19 November 2026)
 
 1. `devel/umac/src/main.c`: `via_rb_changed(uint8_t val)` lists bits `[2:0] = RTC controls` but does nothing with them; `via_rb_in()` returns mouse quadrature/button information only, never RTC serial output. `umac_init()` installs these stubs in the `struct via_cb` callback table.
 2. `devel/umac/src/via.c`: `via_write()` routes VIA register/Port B operations to `via_update_regb()`, while `via_read_regb()` merges the port output latch with input callback according to `VIA_DDRB`. There is no RTC peripheral state or protocol interpreter. `VIA_DDRB` changes are stored but do not notify a peripheral of pin-direction changes. `via_update_regb()` invokes the callback **before** storing the new output latch; integration must account for this ordering or make a narrowly scoped adjustment.
@@ -28,7 +28,7 @@ The M0001AP is a Macintosh Plus and has a real RTC. The goal is a **Macintosh Pl
 5. `devel/umac/src/main.c` `umac_reset()` resets CPU/overlay/SCSI but has no RTC reset path; `devel/umac/CMakeLists.txt` has no RTC compilation unit or RTC test.
 6. `docs/01-development-roadmap.md` already includes RTC correctness under `PLUS-DEV-0002`/`PLUS-EMU-0008`; the missing concrete capability warrants this separate implementation ticket, without altering roadmap sequencing.
 
-**Not yet verified:** a boot/session test exercising real Macintosh ROM RTC reads and PRAM commands; precise serial edge timing against an M0001AP logic-analyzer trace; complete current VIA DDR/interrupt behaviour outside the RTC path. These are acceptance evidence to gather, not claimed results.
+At discovery, verification still needed an original ROM boot with RTC and PRAM commands, M0001AP electrical timing measurements, and broader VIA DDR/interrupt testing.
 
 ### 2. Macintosh Plus hardware contract
 
@@ -44,7 +44,7 @@ The standard Macintosh Plus has a separate Apple serial clock/PRAM IC in the 256
 
 - These are **pins of VIA Port B**, not memory-mapped RTC registers. Software uses the existing VIA address decoding/register mapping. RTC has no separate CPU address range.
 - The transfer is serial, **MSB first**: one command byte, then one data byte for ordinary commands; an extended PRAM command uses two command/address bytes and one data byte. Read/write direction and turn-around are controlled by the command and `VIA_DDRB` bit 0.
-- Model command framing, serial clock transitions, sampling/output timing, chip-select assertion/deassertion, partial transactions, and read-data validity at the software-visible pin level. MAME's early-Mac RTC model samples/advances on the **high-to-low clock transition**; confirm observable start/finish/read alignment using the Mac Plus ROM before fixing test vectors. Do not implement a byte-level shortcut that ignores VIA bit transitions.
+- Model command framing, chip-select, partial transactions, and read-data validity at the VIA pins. MAME's early Mac RTC model uses the **high-to-low clock transition**. The Plus V3 read trace and regression tests below establish the observable response timing in uMac.
 - Map legacy seconds registers 0–3 (and documented aliases), the legacy-accessible 20 PRAM bytes, write-protect register, and the **extended address protocol for all 256 PRAM bytes**. Correctly implement the overlap/alias of legacy and extended PRAM addressing, not two disconnected stores. Decode direction, legal commands, and write-protect effects; avoid speculative undocumented chip commands. Test-mode register handling can be limited to explicitly documented software-observable behaviour, with any unsupported diagnostic-clock acceleration called out.
 - The clock is a **32-bit seconds-since-1904-01-01 00:00:00** counter, not Unix seconds, BCD fields, or 1970 epoch. Linux UTC epoch -> classic Mac epoch offset is **2,082,844,800 seconds**. Use 64-bit internal arithmetic and explicitly encode the 32-bit hardware wrap (the classic 2040 limitation); never truncate the Linux `time_t` before conversion.
 - The real RTC generates a one-second signal visible at VIA **IFR bit 0** (not to be confused with the 6522 pin naming in our helper functions). Preserve the existing interrupt wiring, enable/mask semantics and unrelated CA2/VBL/keyboard events. Coordinate this periodic event with the chosen clock source and avoid double-generating an RTC 1 Hz interrupt.
@@ -91,29 +91,15 @@ Suggested implementation (names may change after design review):
 
 Record exact commands, test fixtures, host time source, expected/observed RTC bytes, test limitations and any screenshot/trace artefacts in **Notes** before requesting review.
 
-### 6. Open design/verification questions
+### 6. Design and verification questions
 
 1. What is the minimum VIA callback/API change that correctly detects ORB **and DDRB** transitions without destabilizing current input/output semantics?
-2. What exact edge/bit timing does the M0001AP ROM use on the first read bit, especially across the DDRB turn-around? Confirm with ROM trace, and later a hardware logic analyzer if ambiguity remains.
+2. What edge carries the first read bit across the DDRB turn-around? `EMU9-R1` verified the Plus V3 ROM sequence in uMac. Physical logic-analyzer timing remains **NOT TESTED**.
 3. What persistence format best accommodates both 256 PRAM bytes and guest-adjusted RTC time without shared-file races or silent data loss? Document the guest clock adjustment policy before implementation.
 4. Should the emulator expose a test-only/fixed-time option in addition to dependency-injected tests? Keep user-facing options minimal unless justified.
 5. How should host wall-clock jumps while an emulator instance is running be reconciled with a deliberate guest-set offset? Specify consistent observable semantics.
 
-**Notes**
-
-- **2026-11-19 — Discovery:** Owner identified missing RTC after merging SCSI to `main` and created `rtc-implementation` from `main`; the branch was identical to `main` when inspected. Code review confirms the three RTC bits are noted but not implemented, and no PRAM backing or RTC serial counter exists. A synthetic 1 Hz VIA event already exists and must be preserved/integrated, not mistaken for the RTC.
-- **2026-11-19 — Hardware investigation:** Apple hardware reference confirms the 6522 Port B PB0/PB1/PB2 interface, 4-byte 1904-epoch counter, 1 Hz VIA interrupt and **256-byte Plus PRAM**. MAME and Linux implementations provide useful protocol cross-checks; exact edge/command tolerance must be validated with Plus ROM. No emulator implementation or tests were performed as part of ticket creation.
-- **2026-11-19 — Scope proposal:** One focused `BUG` ticket for RTC+PRAM hardware capability, proposed `PLUS-EMU-0009`, linked to the existing hardware-profile milestone. **OPEN for triage/design approval**, not authorization to implement.
-
-- **2026-11-19 — Developer component reference and command clarification:** Added [343-0042-B RTC/PRAM reference](343-0042-B-RTC-PRAM-reference.md) with canonical regular and extended command tables and logical PRAM addressing. Clarified that `0xC1` reads PRAM offset `0x00`, whereas `0x81` reads seconds byte 0; distinguished the one-second VIA **IFR bit 0** from the code's helper-function CA naming. These corrections preserve the original discovery record. No emulator code or tests changed.
-
-- **2026-11-19 — Decision (triage/design):** Proceed with the proposed scope: a platform-neutral serial RTC core in a dedicated `rtc.c`/`rtc.h`, a minimal VIA Port B callback extension to deliver resolved ORB **and** DDRB transitions, injectable host-time abstraction, and a versioned 256-byte PRAM + clock-offset backing file. Persistence policy chosen: a single backing file storing magic/version, a signed 64-bit guest clock offset (classic-epoch seconds minus host Unix seconds), and 256 PRAM bytes; written via temp-file + atomic `rename`. Guest clock writes update the offset anchor relative to host time and keep ticking; the host system clock is never modified. Edge convention: receive/advance on the serial clock **high-to-low** transition (per MAME), pending later ROM-trace confirmation.
-
-- **2026-11-19 — Implementation:** Added `devel/umac/include/rtc.h` and `devel/umac/src/rtc.c` (serial state machine `DESELECTED→RX_CMD→[RX_CMD2]→RX_DATA/TX_DATA→COMPLETE`, seconds counter via injectable `rtc_time_provider`, legacy + extended PRAM with shared backing store/aliasing, write protection, and `rtc_pram_save`/`rtc_pram_load`). Extended `struct via_cb` with an `rb_pins(orb, ddrb)` callback invoked in `via_write()` **after** the register store for both `VIA_RB` and `VIA_DDRB` (so DDRB-only turn-around is delivered); existing `rb_change`, mouse/keyboard, sound, SR and IRQ paths unchanged. Wired the RTC from `umac_init()` (callback + `rtc_init`), `via_rb_in()` (PB0 = `rtc_data_out()`), and `umac_reset()` (transient-only `rtc_reset`, PRAM/clock preserved). Added `-P <pram path>` (default `pram.nv`), `umac_rtc_load`/`umac_rtc_save`, and load-on-start/save-on-exit in `unix_main.c`. Host time provided via `time(NULL)` behind the provider. Registered `src/rtc.c` and the two test targets in `CMakeLists.txt`.
-
-- **2026-11-19 — Test:** Built with `-Wall -Wextra -pedantic` (no new warnings) and ran both new headless tests. See the verification matrix evidence under **Details → Verification evidence**. Isolated `umac_rtc_test` and integration `umac_via_rtc_test` both pass; SCSI controller/disk tests still pass when run directly. ROM-trace / System Software acceptance and logic-analyzer edge timing remain **NOT TESTED** (future verification items).
-
-### Verification evidence (2026-11-19)
+### Verification evidence for the initial implementation (19 November 2026)
 
 **Commands (from `build/`):**
 
@@ -172,20 +158,67 @@ Drives the real `via.c` at canonical bus addresses (ORB `0xEFE1FE`, DDRB `0xEFE5
 
 **Regressions:** `umac_scsi_test controller` and `umac_scsi_test disk` pass when invoked directly; core builds clean with `-Wall -Wextra -pedantic`. (Note: `ctest` reports the pre-existing SCSI rows as *Not Run* due to a multi-config executable-path quirk in this build tree, unrelated to this change; the binaries themselves pass.)
 
-**NOT TESTED (future acceptance / other milestones):** genuine Macintosh Plus ROM RTC pin-transaction capture and decoded-command verification; exact first-read-bit edge alignment against a logic-analyzer trace; Date & Time / Control Panel retention under System Software; unpatched-ROM IWM boot smoke test. These remain open verification items, not claimed results.
+**NOT TESTED in the initial implementation run** were Plus ROM RTC transaction capture, physical edge timing, System Software clock and PRAM retention, and unpatched-ROM IWM boot.
+
+### Verification evidence for the clock correction (19 November 2026)
+
+| Check | Evidence | Result |
+| --- | --- | --- |
+| Isolated RTC and VIA timing | The updated tests sample PB0 after the falling edge. The VIA test reproduces the Plus V3 select, DDRB turn-around and low/high/read sequence. At fixed Unix time `1795114880`, the test expects `0xE724F800`. Both tests failed against `1bcf2fe` and passed with `df9bd44`. | PASS |
+| Plus V3 ROM | With `rom.bin` and the supported patched startup, the ROM's RTC routine read `E7 24 F8 00` for commands `9D 99 95 91`. The same trace on `1bcf2fe` read `CF 48 F0 00`. | PASS |
+| Guest clock with live Linux time | Finder reached System 7.0.1 from `System70_boot.dsk` with `HD10_512.hda` attached, then System 6.0.7 on a separate SCSI-only launch with a copy of the user's v1 PRAM. In each run, all three samples of guest `Time` (`$020C`) matched Linux to the second in GMT. The System 6 General Control Panel showed `19:16:38` on `11/19/26` while Linux read `19:16:38 GMT` on 19 November 2026. | PASS |
+| Guest setting and PRAM retention | A Control Panel clock edit left a `+32 s` guest offset. A later volume edit changed PRAM byte `0x10` from `3` to `5`. After clean exit and restart, the guest clock still led Linux by 32 seconds and the Control Panel showed volume `5`. The runs used a disposable PRAM copy and opened both media images read-only. | PASS |
+| SCSI regressions | `scsi_controller`, `scsi_disk`, and the optional `scsi_plus_rom` test passed. | PASS |
+
+The Plus V3 ROM fixture `devel/umac/rom.bin` has SHA-256 `dd908e2b65772a6b1f0c859c24e9a0d3dcde17b1c6a24f4abd8955846d7895e7`. Guest `Time` is the low-memory value System Software loads from the RTC and uses for time queries. [Apple Inside Macintosh](https://leopard-adc.pepas.com/documentation/mac/OSUtilities/OSUtilities-105.html)
+
+Physical logic-analyzer timing remains **NOT TESTED** and belongs to [the hardware profile](../../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile). Unpatched-ROM IWM boot remains **NOT TESTED** under [the unmodified-ROM milestone](../../01-development-roadmap.md#plus-dev-0003--run-the-unmodified-macintosh-plus-rom). The ROM trace and System Software runs cover the software acceptance for this correction.
+
+### Review Findings (19 November 2026)
+
+| Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
+| --- | --- | --- | --- | --- |
+| `EMU9-R1` | `CORRECTION_REQUIRED` | `rtc_begin_read()` in `1bcf2fe` puts bit 7 on PB0 early. The Plus V3 ROM changes DDRB to input, clocks PB1 low then high, and samples PB0 after the first falling edge has advanced to bit 6. The saved v1 PRAM has a zero guest adjustment. A fixed host timestamp gives `0xE724F800` in the RTC and `0xCF48F000` in the ROM's serial read. | Present bit 7 on the first response falling edge. Verify all eight bits using the ROM's VIA sequence and compare the guest clock with Linux. | `VERIFIED` in `df9bd44` by the regression tests, Plus V3 trace, and System 7.0.1 and 6.0.7 checks above. |
+
+**Notes**
+
+- **2026-11-19 — Discovery:** Owner identified missing RTC after merging SCSI to `main` and created `rtc-implementation` from `main`; the branch was identical to `main` when inspected. Code review confirms the three RTC bits are noted but not implemented, and no PRAM backing or RTC serial counter exists. A synthetic 1 Hz VIA event already exists and must be preserved/integrated, not mistaken for the RTC.
+- **2026-11-19 — Hardware investigation:** Apple hardware reference confirms the 6522 Port B PB0/PB1/PB2 interface, 4-byte 1904-epoch counter, 1 Hz VIA interrupt and **256-byte Plus PRAM**. MAME and Linux implementations provide useful protocol cross-checks; exact edge/command tolerance must be validated with Plus ROM. No emulator implementation or tests were performed as part of ticket creation.
+- **2026-11-19 — Scope proposal:** One focused `BUG` ticket for RTC+PRAM hardware capability, proposed `PLUS-EMU-0009`, linked to the existing hardware-profile milestone. **OPEN for triage/design approval**, not authorization to implement.
+
+- **2026-11-19 — Developer component reference and command clarification:** Added [343-0042-B RTC/PRAM reference](343-0042-B-RTC-PRAM-reference.md) with canonical regular and extended command tables and logical PRAM addressing. Clarified that `0xC1` reads PRAM offset `0x00`, whereas `0x81` reads seconds byte 0; distinguished the one-second VIA **IFR bit 0** from the code's helper-function CA naming. These corrections preserve the original discovery record. No emulator code or tests changed.
+
+- **2026-11-19 — Decision (triage/design):** Proceed with the proposed scope: a platform-neutral serial RTC core in a dedicated `rtc.c`/`rtc.h`, a minimal VIA Port B callback extension to deliver resolved ORB **and** DDRB transitions, injectable host-time abstraction, and a versioned 256-byte PRAM + clock-offset backing file. Persistence policy chosen: a single backing file storing magic/version, a signed 64-bit guest clock offset (classic-epoch seconds minus host Unix seconds), and 256 PRAM bytes; written via temp-file + atomic `rename`. Guest clock writes update the offset anchor relative to host time and keep ticking; the host system clock is never modified. Edge convention: receive/advance on the serial clock **high-to-low** transition (per MAME), pending later ROM-trace confirmation.
+
+- **2026-11-19 — Implementation:** Added `devel/umac/include/rtc.h` and `devel/umac/src/rtc.c` (serial state machine `DESELECTED→RX_CMD→[RX_CMD2]→RX_DATA/TX_DATA→COMPLETE`, seconds counter via injectable `rtc_time_provider`, legacy + extended PRAM with shared backing store/aliasing, write protection, and `rtc_pram_save`/`rtc_pram_load`). Extended `struct via_cb` with an `rb_pins(orb, ddrb)` callback invoked in `via_write()` **after** the register store for both `VIA_RB` and `VIA_DDRB` (so DDRB-only turn-around is delivered); existing `rb_change`, mouse/keyboard, sound, SR and IRQ paths unchanged. Wired the RTC from `umac_init()` (callback + `rtc_init`), `via_rb_in()` (PB0 = `rtc_data_out()`), and `umac_reset()` (transient-only `rtc_reset`, PRAM/clock preserved). Added `-P <pram path>` (default `pram.nv`), `umac_rtc_load`/`umac_rtc_save`, and load-on-start/save-on-exit in `unix_main.c`. Host time provided via `time(NULL)` behind the provider. Registered `src/rtc.c` and the two test targets in `CMakeLists.txt`.
+
+- **2026-11-19 — Test:** Built with `-Wall -Wextra -pedantic` (no new warnings) and ran both new headless tests. See the verification matrix evidence under **Details → Verification evidence**. Isolated `umac_rtc_test` and integration `umac_via_rtc_test` both pass; SCSI controller/disk tests still pass when run directly. ROM-trace / System Software acceptance and logic-analyzer edge timing remain **NOT TESTED** (future verification items).
+
+- **2026-11-19 — Owner verification and status change:** The project owner reported that the implementation makes a clock appear in uMac, but the displayed time differs from Linux. `REVIEW` → `IN_PROGRESS` to compare the host-derived RTC counter, the saved clock offset, and the bytes read by the ROM through VIA Port B.
+
+- **2026-11-19 — Investigation and code review:** The launch's saved `pram.nv` contains the default offset of `2082844800` seconds. Its RAM dump holds guest `Time` (`$020C`) of `0xCF48F017`, corresponding to 14 March 2014 while Linux was on 19 November 2026. Reproduced with Plus V3 and System 7.0.1 using a disposable PRAM file and host `time()` fixed at `1795114880`. A trace at the RTC/VIA boundary showed the ROM writes DDRB at `$400268`, clocks PB1 low/high at `$400274`/`$400276`, then reads PB0 at `$400278`. Commands `9D 99 95 91` returned `CF 48 F0 00` for expected bytes `E7 24 F8 00`. Every response drops its first bit and repeats its last bit. The existing tests read PB0 before clocking and all four CTest entries passed on the affected build. Marked `1bcf2fe` `CHANGES_REQUESTED` for the response timing. [Plus ROM read loop](https://github.com/jonathanschilling/mac_rom/blob/main/plus/boot/vectors.s#L432-L445)
+
+- **2026-11-19 — Rework:** `df9bd44` prepares the response at command completion and drives its most significant bit on the first subsequent falling edge, then drives the remaining bits on the next seven edges. Updated `tests/test_rtc.c` to sample after the falling edge and `tests/test_via_rtc.c` to reproduce the ROM's VIA sequence with the traced timestamp.
+
+- **2026-11-19 — Automated test:** Configured an isolated Debug build with `cmake -S devel/umac -B "$rtc_build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DUMAC_TEST_PLUS_ROM="$PWD/devel/umac/rom.bin"` and built with `cmake --build "$rtc_build" -j 4`. With the revised tests and original RTC code, `ctest --test-dir "$rtc_build" --output-on-failure` failed `rtc_core` and `via_rtc`. After the fix all five tests passed, including the optional Plus V3 SCSI test. `cmake --build build -j 4` and `ctest --test-dir build --output-on-failure` passed all four default tests. `make -C devel/umac -j4 MEMSIZE=4096` also linked the emulator in a temporary source copy. The clean builds reported existing Musashi unused-variable warnings.
+
+- **2026-11-19 — ROM and System Software test:** Traced `rtc_via_update()` and `rtc_data_out()` in a diagnostic build with `time()` fixed to `1795114880`. The corrected ROM reads returned `E7 24 F8 00`. Booted the normal build offscreen in temporary directories with `SDL_VIDEODRIVER=offscreen SDL_RENDER_DRIVER=software TZ=Europe/London`, `umac -r rom.bin -d System70_boot.dsk -s HD10_512.hda -P <temporary-pram>`, and a separate launch with `-s HD10_512.hda` and a copy of the existing PRAM. Live guest time matched Linux in both runs. Opened the System 6 Control Panel and inspected the displayed date and time. With a disposable PRAM copy, set a guest clock adjustment, changed speaker volume, and verified both on restart as recorded above.
+
+- **2026-11-19 — Status change:** `IN_PROGRESS` → `REVIEW` with `EMU9-R1` verified. Recorded correction commit `df9bd44` as `UNREVIEWED`. Resolution is pending explicit acceptance.
 
 **Proposed Change**
 
 Introduce a dedicated, independently testable Macintosh Plus 256-byte RTC/PRAM device connected to the 6522 VIA Port B serial pins with proper DDR handling, command state machine, seconds-since-1904 counter based on Linux time, guest-settable time, persisted battery-backed PRAM/clock anchor, and coherent 1 Hz VIA notifications. Integrate without direct-ROM or low-memory shortcuts, retain patched uMac mode and SCSI/floppy compatibility, and satisfy the acceptance matrix above.
 
-**This is a proposal only.** Confirm pin timing, persistence/guest-time policy, and narrow VIA integration during ticket triage before writing device code.
+For `EMU9-R1`, load the response byte at command completion and drive one bit on each subsequent falling edge of PB1, beginning with bit 7. Exercise the Plus ROM's DDRB turn-around and low/high/sample sequence in the VIA test. Compare the four serial bytes and the guest clock against Linux during boot.
 
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `rtc-implementation` | `1bcf2fe` | `UNREVIEWED` | Serial RTC + 256-byte PRAM core, VIA Port B `rb_pins` plumbing, umac/unix integration, isolated and VIA+RTC tests |
+| `rtc-implementation` | [`1bcf2fe`](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de) | `CHANGES_REQUESTED` | Serial RTC + 256-byte PRAM core, VIA integration, Unix persistence and headless tests |
+| `rtc-implementation` | `df9bd44` | `UNREVIEWED` | Correct RTC response bit timing and replay the Plus ROM's clock sequence in tests |
 
 **Resolution Description**
 
-Pending review. Implemented on `rtc-implementation` (commit `1bcf2fe`): a platform-neutral serial RTC/PRAM core (`devel/umac/src/rtc.c`, `devel/umac/include/rtc.h`) connected to the 6522 VIA Port B pins through a new `via_cb.rb_pins` resolved-pin callback, with injectable host time, guest-settable 32-bit 1904-epoch counter, legacy + extended 256-byte PRAM with shared/aliased storage and write protection, and a versioned atomically-replaced backing file persisted across restarts (`-P`, default `pram.nv`). Integrated into `umac_init`/`umac_reset` and the Unix front-end without ROM or low-memory shortcuts; existing VIA/SCSI/keyboard/mouse behaviour preserved. Verified by `umac_rtc_test` (8 isolated cases) and `umac_via_rtc_test` (4 bus-level integration cases), all passing; SCSI tests pass directly. Remaining acceptance items (real Plus ROM pin-transaction capture, edge-timing against hardware trace, System Software retention, unpatched-ROM boot) are explicitly **NOT TESTED** and tracked as future verification. Resolution remains `Pending` until reviewed and accepted.
+Pending.

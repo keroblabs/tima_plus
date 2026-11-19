@@ -1,13 +1,13 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** SCSI integrated; RTC emulation ticket opened — 19 November 2026\
+**Status:** SCSI integrated and RTC clock correction in review — 19 November 2026\
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
 **Programme plan:** [Development roadmap](../01-development-roadmap.md)
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current totals:** 3 registered / 1 OPEN / 0 IN_PROGRESS / 0 REVIEW / 0 RESOLVED / 2 CLOSED / 0 DEFERRED.
+**Current totals:** 3 registered / 0 OPEN / 0 IN_PROGRESS / 1 REVIEW / 0 RESOLVED / 2 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -31,4 +31,4 @@ Existing roadmap identifiers (`PLUS-DEV-0001`–`0010`, `PLUS-EMU-0001`–`0008`
 
 `PLUS-EMU-0004` was the first opened record and covers the controller only. `PLUS-EMU-0005` covers a separate emulated SCSI hard-disk target and opaque BlueSCSI-compatible whole-device image. Both are **CLOSED** following approved engineering review, project-owner manual verification of a generated SCSI hard-drive image booting under uMac with floppy support, and the owner's mandatory final review and merge of [PR #1](https://github.com/keroblabs/tima_plus/pull/1) into `main` (`e568e6d`). `PLUS-SYS-0006` retains the Tima/Plus SCSI system driver, image preparation and boot work. Opening either ticket does **not** change the [floppy-first milestone order](../01-development-roadmap.md).
 
-`PLUS-EMU-0009` records the missing serial RTC and 256-byte battery-backed PRAM hardware under the already-planned `PLUS-DEV-0002` profile; it does not imply approval to implement or change the milestone order.
+`PLUS-EMU-0009` covers the serial RTC and 256-byte battery-backed PRAM hardware under `PLUS-DEV-0002`.
