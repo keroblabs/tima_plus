@@ -165,9 +165,9 @@ static void     via_rtc_pins(uint8_t orb, uint8_t ddrb)
 }
 
 /* Persistence hooks (used by the Unix front-end). */
-void    umac_rtc_load(const char *path)
+int     umac_rtc_load(const char *path)
 {
-        rtc_pram_load(&rtc, path);
+        return rtc_pram_load(&rtc, path);
 }
 
 int     umac_rtc_save(const char *path)

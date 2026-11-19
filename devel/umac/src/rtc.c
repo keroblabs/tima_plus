@@ -26,8 +26,14 @@
  * SOFTWARE.
  */
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "rtc.h"
 
@@ -359,9 +365,133 @@ static int64_t rtc_get_i64(const uint8_t *p)
         return (int64_t)u;
 }
 
+static int rtc_file_read(const char *path, uint8_t buf[RTC_FILE_SIZE])
+{
+        if (!path || !*path) {
+                errno = EINVAL;
+                return -1;
+        }
+
+        int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+        if (fd < 0)
+                return (errno == ENOENT) ? RTC_PRAM_MISSING : -1;
+
+        struct stat st;
+        if (fstat(fd, &st) != 0) {
+                int saved_errno = errno;
+                close(fd);
+                errno = saved_errno;
+                return -1;
+        }
+        if (!S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_size != RTC_FILE_SIZE) {
+                close(fd);
+                errno = EINVAL;
+                return -1;
+        }
+
+        size_t done = 0;
+        while (done < RTC_FILE_SIZE) {
+                ssize_t n = read(fd, buf + done, RTC_FILE_SIZE - done);
+                if (n < 0 && errno == EINTR)
+                        continue;
+                if (n <= 0) {
+                        int saved_errno = (n == 0) ? EINVAL : errno;
+                        close(fd);
+                        errno = saved_errno;
+                        return -1;
+                }
+                done += (size_t)n;
+        }
+
+        uint8_t extra;
+        ssize_t n;
+        do {
+                n = read(fd, &extra, 1);
+        } while (n < 0 && errno == EINTR);
+        int saved_errno = errno;
+        if (close(fd) != 0 && n >= 0)
+                return -1;
+        if (n < 0) {
+                errno = saved_errno;
+                return -1;
+        }
+        if (n != 0 || memcmp(buf, RTC_FILE_MAGIC, 4) != 0 ||
+            rtc_get_u32(buf + 4) != RTC_FILE_VERSION) {
+                errno = EINVAL;
+                return -1;
+        }
+        return 0;
+}
+
+int     rtc_pram_check(const char *path)
+{
+        uint8_t buf[RTC_FILE_SIZE];
+        return rtc_file_read(path, buf);
+}
+
+static int rtc_write_all(int fd, const uint8_t *buf, size_t len)
+{
+        size_t done = 0;
+        while (done < len) {
+                ssize_t n = write(fd, buf + done, len - done);
+                if (n < 0 && errno == EINTR)
+                        continue;
+                if (n <= 0) {
+                        if (n == 0)
+                                errno = EIO;
+                        return -1;
+                }
+                done += (size_t)n;
+        }
+        return 0;
+}
+
+static int rtc_sync_parent_directory(const char *path)
+{
+        char *parent = strdup(path);
+        if (!parent)
+                return -1;
+
+        char *slash = strrchr(parent, '/');
+        if (!slash) {
+                free(parent);
+                parent = strdup(".");
+                if (!parent)
+                        return -1;
+        } else if (slash == parent) {
+                slash[1] = '\0';
+        } else {
+                *slash = '\0';
+        }
+
+        int fd = open(parent, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+        int saved_errno = errno;
+        free(parent);
+        if (fd < 0) {
+                errno = saved_errno;
+                return -1;
+        }
+        int result = fsync(fd);
+        saved_errno = errno;
+        if (close(fd) != 0 && result == 0)
+                return -1;
+        if (result != 0) {
+                errno = saved_errno;
+                return -1;
+        }
+        return 0;
+}
+
 int     rtc_pram_save(rtc_t *r, const char *path)
 {
-        if (!path)
+        if (!r || !path || !*path || path[strlen(path) - 1] == '/') {
+                errno = EINVAL;
+                return -1;
+        }
+
+        /* A missing path is a first boot.  Existing paths must be a
+         * well-formed PRAM file; never replace arbitrary or corrupt data. */
+        if (rtc_pram_check(path) < 0)
                 return -1;
 
         uint8_t buf[RTC_FILE_SIZE];
@@ -370,54 +500,108 @@ int     rtc_pram_save(rtc_t *r, const char *path)
         rtc_put_i64(buf + 8, r->clock_offset);
         memcpy(buf + 16, r->pram, RTC_PRAM_SIZE);
 
-        /* Atomic replace: write to a temp file, then rename. */
-        char tmp[1024];
-        int n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-        if (n <= 0 || (size_t)n >= sizeof(tmp))
+        size_t tmp_len = strlen(path) + sizeof(".tmp.XXXXXX");
+        char *tmp = malloc(tmp_len);
+        if (!tmp)
                 return -1;
+        snprintf(tmp, tmp_len, "%s.tmp.XXXXXX", path);
 
-        FILE *f = fopen(tmp, "wb");
-        if (!f)
+        int fd = mkstemp(tmp);
+        if (fd < 0) {
+                int saved_errno = errno;
+                free(tmp);
+                errno = saved_errno;
                 return -1;
-        int ok = (fwrite(buf, 1, sizeof(buf), f) == sizeof(buf));
-        if (fflush(f) != 0)
+        }
+
+        int ok = (rtc_write_all(fd, buf, sizeof(buf)) == 0 && fsync(fd) == 0);
+        int saved_errno = errno;
+        if (close(fd) != 0 && ok) {
                 ok = 0;
-        if (fclose(f) != 0)
-                ok = 0;
+                saved_errno = errno;
+        }
         if (!ok) {
-                remove(tmp);
+                unlink(tmp);
+                free(tmp);
+                errno = saved_errno;
+                return -1;
+        }
+        if (rtc_pram_check(path) < 0) {
+                saved_errno = errno;
+                unlink(tmp);
+                free(tmp);
+                errno = saved_errno;
                 return -1;
         }
         if (rename(tmp, path) != 0) {
-                remove(tmp);
+                saved_errno = errno;
+                unlink(tmp);
+                free(tmp);
+                errno = saved_errno;
                 return -1;
         }
-        return 0;
+        free(tmp);
+
+        /* The file and the rename are both synced before reporting a
+         * successful save.  A directory-sync failure is reported even
+         * though the replacement may already be visible. */
+        return rtc_sync_parent_directory(path);
 }
 
 int     rtc_pram_load(rtc_t *r, const char *path)
 {
-        if (!path)
+        if (!r) {
+                errno = EINVAL;
                 return -1;
-
-        FILE *f = fopen(path, "rb");
-        if (!f)
-                return -1;
-
+        }
         uint8_t buf[RTC_FILE_SIZE];
-        size_t got = fread(buf, 1, sizeof(buf), f);
-        /* Reject trailing garbage too. */
-        int extra = (fgetc(f) != EOF);
-        fclose(f);
-
-        if (got != sizeof(buf) || extra)
-                return -1;
-        if (memcmp(buf, RTC_FILE_MAGIC, 4) != 0)
-                return -1;
-        if (rtc_get_u32(buf + 4) != RTC_FILE_VERSION)
-                return -1;
+        int result = rtc_file_read(path, buf);
+        if (result != 0)
+                return result;
 
         r->clock_offset = rtc_get_i64(buf + 8);
         memcpy(r->pram, buf + 16, RTC_PRAM_SIZE);
         return 0;
+}
+
+int     rtc_pram_lock(const char *path)
+{
+        if (!path || !*path) {
+                errno = EINVAL;
+                return -1;
+        }
+        size_t lock_len = strlen(path) + sizeof(".lock");
+        char *lock_path = malloc(lock_len);
+        if (!lock_path)
+                return -1;
+        snprintf(lock_path, lock_len, "%s.lock", path);
+
+        int fd = open(lock_path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW,
+                      0600);
+        int saved_errno = errno;
+        free(lock_path);
+        if (fd < 0) {
+                errno = saved_errno;
+                return -1;
+        }
+
+        struct stat st;
+        if (fstat(fd, &st) != 0) {
+                saved_errno = errno;
+                close(fd);
+                errno = saved_errno;
+                return -1;
+        }
+        if (!S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_size != 0) {
+                close(fd);
+                errno = EINVAL;
+                return -1;
+        }
+        if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+                saved_errno = errno;
+                close(fd);
+                errno = saved_errno;
+                return -1;
+        }
+        return fd;
 }

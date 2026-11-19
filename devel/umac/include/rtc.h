@@ -120,10 +120,23 @@ uint32_t rtc_get_seconds(rtc_t *r);
 
 /* Persistence.  The backing file stores all 256 PRAM bytes plus the
  * guest clock offset.  Returns 0 on success, non-zero on error.
- * rtc_pram_load() leaves the RTC at cold defaults on a missing or
- * invalid/corrupt file and returns non-zero in that case.
+ * rtc_pram_check/load return RTC_PRAM_MISSING when the path does not
+ * exist, 0 for a valid file, and -1 for invalid or inaccessible files.
+ * Load leaves the current RTC unchanged unless the whole file validates.
+ * Save may create a missing file, but refuses to replace an existing
+ * file unless it is a valid RTC/PRAM file.  It writes through a unique
+ * same-directory temporary file, syncs the file, renames atomically and
+ * syncs the containing directory.  The Unix front-end holds rtc_pram_lock
+ * from load through save; callers must do the same for concurrent use.
  */
+#define RTC_PRAM_MISSING 1
+int     rtc_pram_check(const char *path);
 int     rtc_pram_save(rtc_t *r, const char *path);
 int     rtc_pram_load(rtc_t *r, const char *path);
+
+/* Acquire an exclusive, non-blocking per-path process lock.  Keep the
+ * returned descriptor open for the emulator's lifetime; close it to
+ * release the lock.  The caller should pass a canonical path. */
+int     rtc_pram_lock(const char *path);
 
 #endif

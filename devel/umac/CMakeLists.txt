@@ -92,6 +92,13 @@ if(BUILD_TESTING)
     target_compile_options(umac_via_rtc_test PRIVATE -Wall -Wextra -pedantic)
     target_link_libraries(umac_via_rtc_test PRIVATE umac_core)
     add_test(NAME via_rtc COMMAND umac_via_rtc_test)
+
+    add_test(NAME rtc_pram_safety
+        COMMAND ${CMAKE_COMMAND}
+            -DUMAC=$<TARGET_FILE:umac>
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/rtc_pram_safety
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pram_safety.cmake)
+
     set(UMAC_TEST_PLUS_ROM "" CACHE FILEPATH "User-supplied Mac Plus V3 ROM for the SCSI Manager test")
     if(UMAC_TEST_PLUS_ROM)
         add_test(NAME scsi_plus_rom COMMAND umac_scsi_test rom "${UMAC_TEST_PLUS_ROM}")

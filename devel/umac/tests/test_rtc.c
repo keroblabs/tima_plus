@@ -4,9 +4,11 @@
  */
 
 #include <stdint.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "rtc.h"
@@ -303,6 +305,8 @@ static void test_persistence(void)
         int fd = mkstemp(path);
         CHECK(fd >= 0);
         close(fd);
+        CHECK(unlink(path) == 0);
+        CHECK(rtc_pram_check(path) == RTC_PRAM_MISSING);
 
         g_host_seconds = 2000;
         rtc_init(&r, &tp);
@@ -310,6 +314,7 @@ static void test_persistence(void)
         ext_write(&d, 0xFF, 0xAD);
         reg_write(&d, 0x01, 0x99);       /* guest-set clock offset */
         CHECK(rtc_pram_save(&r, path) == 0);
+        CHECK(rtc_pram_check(path) == 0);
 
         /* Reload into a fresh instance: PRAM + clock offset restored. */
         rtc_t r2;
@@ -327,7 +332,7 @@ static void test_persistence(void)
         /* Missing file: load fails, instance keeps cold defaults. */
         rtc_t r3;
         rtc_init(&r3, &tp);
-        CHECK(rtc_pram_load(&r3, "/tmp/umac_rtc_does_not_exist_zzz") != 0);
+        CHECK(rtc_pram_load(&r3, "/tmp/umac_rtc_does_not_exist_zzz") == RTC_PRAM_MISSING);
 
         /* Corrupt/truncated file: load rejects it. */
         FILE *cf = fopen(path, "wb");
@@ -335,9 +340,60 @@ static void test_persistence(void)
         fputs("garbage", cf);
         fclose(cf);
         CHECK(rtc_pram_load(&r3, path) != 0);
+        CHECK(rtc_pram_save(&r3, path) != 0);
+        cf = fopen(path, "rb");
+        CHECK(cf != NULL);
+        char unchanged[8] = {0};
+        CHECK(fread(unchanged, 1, 7, cf) == 7);
+        CHECK(fgetc(cf) == EOF);
+        fclose(cf);
+        CHECK(memcmp(unchanged, "garbage", 7) == 0);
 
         remove(path);
         printf("  test_persistence OK\n");
+}
+
+static void test_pram_locking(void)
+{
+        char path[] = "/tmp/umac_rtc_lock_XXXXXX";
+        int fd = mkstemp(path);
+        CHECK(fd >= 0);
+        close(fd);
+        CHECK(unlink(path) == 0);
+
+        int first = rtc_pram_lock(path);
+        CHECK(first >= 0);
+        errno = 0;
+        int second = rtc_pram_lock(path);
+        CHECK(second < 0);
+        CHECK(errno == EWOULDBLOCK || errno == EAGAIN);
+
+        /* A separate emulator process must be refused as well. */
+        pid_t child = fork();
+        CHECK(child >= 0);
+        if (child == 0) {
+                close(first);
+                int child_fd = rtc_pram_lock(path);
+                int refused = child_fd < 0 &&
+                              (errno == EWOULDBLOCK || errno == EAGAIN);
+                if (child_fd >= 0)
+                        close(child_fd);
+                _exit(refused ? 0 : 1);
+        }
+        int child_status = 0;
+        CHECK(waitpid(child, &child_status, 0) == child);
+        CHECK(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0);
+
+        close(first);
+
+        int third = rtc_pram_lock(path);
+        CHECK(third >= 0);
+        close(third);
+
+        char lock_path[sizeof(path) + sizeof(".lock")];
+        snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+        CHECK(unlink(lock_path) == 0);
+        printf("  test_pram_locking OK\n");
 }
 
 int main(void)
@@ -351,6 +407,7 @@ int main(void)
         test_write_protect();
         test_abort();
         test_persistence();
+        test_pram_locking();
         printf("All RTC core tests passed.\n");
         return 0;
 }
