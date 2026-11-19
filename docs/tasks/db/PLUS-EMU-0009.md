@@ -1,7 +1,7 @@
 # PLUS-EMU-0009 — Implement Macintosh Plus serial RTC and battery-backed PRAM
 
 **ID:** `PLUS-EMU-0009`  
-**Status:** `OPEN`  
+**Status:** `REVIEW`  
 **Title:** Implement Macintosh Plus serial RTC and battery-backed PRAM
 
 **Description**
@@ -107,6 +107,73 @@ Record exact commands, test fixtures, host time source, expected/observed RTC by
 
 - **2026-11-19 — Developer component reference and command clarification:** Added [343-0042-B RTC/PRAM reference](343-0042-B-RTC-PRAM-reference.md) with canonical regular and extended command tables and logical PRAM addressing. Clarified that `0xC1` reads PRAM offset `0x00`, whereas `0x81` reads seconds byte 0; distinguished the one-second VIA **IFR bit 0** from the code's helper-function CA naming. These corrections preserve the original discovery record. No emulator code or tests changed.
 
+- **2026-11-19 — Decision (triage/design):** Proceed with the proposed scope: a platform-neutral serial RTC core in a dedicated `rtc.c`/`rtc.h`, a minimal VIA Port B callback extension to deliver resolved ORB **and** DDRB transitions, injectable host-time abstraction, and a versioned 256-byte PRAM + clock-offset backing file. Persistence policy chosen: a single backing file storing magic/version, a signed 64-bit guest clock offset (classic-epoch seconds minus host Unix seconds), and 256 PRAM bytes; written via temp-file + atomic `rename`. Guest clock writes update the offset anchor relative to host time and keep ticking; the host system clock is never modified. Edge convention: receive/advance on the serial clock **high-to-low** transition (per MAME), pending later ROM-trace confirmation.
+
+- **2026-11-19 — Implementation:** Added `devel/umac/include/rtc.h` and `devel/umac/src/rtc.c` (serial state machine `DESELECTED→RX_CMD→[RX_CMD2]→RX_DATA/TX_DATA→COMPLETE`, seconds counter via injectable `rtc_time_provider`, legacy + extended PRAM with shared backing store/aliasing, write protection, and `rtc_pram_save`/`rtc_pram_load`). Extended `struct via_cb` with an `rb_pins(orb, ddrb)` callback invoked in `via_write()` **after** the register store for both `VIA_RB` and `VIA_DDRB` (so DDRB-only turn-around is delivered); existing `rb_change`, mouse/keyboard, sound, SR and IRQ paths unchanged. Wired the RTC from `umac_init()` (callback + `rtc_init`), `via_rb_in()` (PB0 = `rtc_data_out()`), and `umac_reset()` (transient-only `rtc_reset`, PRAM/clock preserved). Added `-P <pram path>` (default `pram.nv`), `umac_rtc_load`/`umac_rtc_save`, and load-on-start/save-on-exit in `unix_main.c`. Host time provided via `time(NULL)` behind the provider. Registered `src/rtc.c` and the two test targets in `CMakeLists.txt`.
+
+- **2026-11-19 — Test:** Built with `-Wall -Wextra -pedantic` (no new warnings) and ran both new headless tests. See the verification matrix evidence under **Details → Verification evidence**. Isolated `umac_rtc_test` and integration `umac_via_rtc_test` both pass; SCSI controller/disk tests still pass when run directly. ROM-trace / System Software acceptance and logic-analyzer edge timing remain **NOT TESTED** (future verification items).
+
+### Verification evidence (2026-11-19)
+
+**Commands (from `build/`):**
+
+```
+cmake . && cmake --build . --target umac_rtc_test umac_via_rtc_test
+./umac_rtc_test
+./umac_via_rtc_test
+./umac_scsi_test controller && ./umac_scsi_test disk
+```
+
+**Isolated RTC core — `tests/test_rtc.c` → `umac_rtc_test` (PASS):**
+
+```
+RTC core tests:
+  test_clock_read OK
+  test_clock_write OK
+  test_wrap OK
+  test_pram_aliasing OK
+  test_pram_extended OK
+  test_write_protect OK
+  test_abort OK
+  test_persistence OK
+All RTC core tests passed.
+```
+
+| Area | Evidence (test fixture) | Result |
+| --- | --- | --- |
+| Clock read | Host Unix `0`, zero guest offset → `0x7C25B080`; bytes `0x81/0x85/0x89/0x8D` = `80 B0 25 7C`; aliases `0x91/0x95/0x99/0x9D` identical; +100 s progression. | PASS |
+| Clock write | Guest writes `0x11223344`; host unchanged (`1000`); continues ticking (+5 → `0x11223349`). | PASS |
+| 32-bit wrap | Set `0xFFFFFFFE`, +3 s host → `0x00000001`. | PASS |
+| PRAM aliasing | `0x41`/`0xC1`/ext `0x00` one byte; `0x21`/`0xA1`/ext `0x10` one byte; ext write ↔ legacy read. | PASS |
+| Extended PRAM | Addresses `0x00,0x13,0x1F,0x20,0xFF` independent read/write. | PASS |
+| Write protect | `0x35 0x80` blocks PRAM + seconds writes, reads OK; `0x35 0x00` re-enables. | PASS |
+| Aborted transfer | Deselect after 4 of 8 data bits → no completed write. | PASS |
+| Persistence | Save/reload restores 256 PRAM + guest clock offset; warm reset preserves; missing file and corrupt/truncated file both rejected. | PASS |
+
+**VIA + RTC integration — `tests/test_via_rtc.c` → `umac_via_rtc_test` (PASS):**
+
+```
+VIA + RTC integration tests:
+  test_clock_through_via OK
+  test_pram_through_via OK
+  test_ddrb_turnaround OK
+  test_one_second_irq OK
+All VIA + RTC integration tests passed.
+```
+
+Drives the real `via.c` at canonical bus addresses (ORB `0xEFE1FE`, DDRB `0xEFE5FE`, IFR `0xEFFBFE`, IER `0xEFFDFE`) with the exact `main.c` wiring (`rb_pins`→`rtc_via_update`, `rb_in`→`rtc_data_out`):
+
+| Area | Evidence | Result |
+| --- | --- | --- |
+| Clock through VIA | Serial `0x81/0x85/0x89/0x8D` via ORB/DDRB reconstruct `0x7C25B080`. | PASS |
+| PRAM through VIA | Legacy `0x41` write, legacy `0xC1` + extended `0xB8 01` read agree; extended `0xFF` write/read. | PASS |
+| DDRB turn-around | After driving PB0 output latch = 1, flipping DDRB bit 0 to input makes PB0 reads track the RTC-driven byte (`0x80`); with PB0 output the ORB read returns the latch. | PASS |
+| One-second IRQ | `IER 0x81` enables IFR bit 0; `via_caX_event(1)` asserts IRQ + IFR bit 0; ack clears; VBL (IFR bit 1) independent. | PASS |
+
+**Regressions:** `umac_scsi_test controller` and `umac_scsi_test disk` pass when invoked directly; core builds clean with `-Wall -Wextra -pedantic`. (Note: `ctest` reports the pre-existing SCSI rows as *Not Run* due to a multi-config executable-path quirk in this build tree, unrelated to this change; the binaries themselves pass.)
+
+**NOT TESTED (future acceptance / other milestones):** genuine Macintosh Plus ROM RTC pin-transaction capture and decoded-command verification; exact first-read-bit edge alignment against a logic-analyzer trace; Date & Time / Control Panel retention under System Software; unpatched-ROM IWM boot smoke test. These remain open verification items, not claimed results.
+
 **Proposed Change**
 
 Introduce a dedicated, independently testable Macintosh Plus 256-byte RTC/PRAM device connected to the 6522 VIA Port B serial pins with proper DDR handling, command state machine, seconds-since-1904 counter based on Linux time, guest-settable time, persisted battery-backed PRAM/clock anchor, and coherent 1 Hz VIA notifications. Integrate without direct-ROM or low-memory shortcuts, retain patched uMac mode and SCSI/floppy compatibility, and satisfy the acceptance matrix above.
@@ -117,7 +184,8 @@ Introduce a dedicated, independently testable Macintosh Plus 256-byte RTC/PRAM d
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `rtc-implementation` | `1bcf2fe` | `UNREVIEWED` | Serial RTC + 256-byte PRAM core, VIA Port B `rb_pins` plumbing, umac/unix integration, isolated and VIA+RTC tests |
 
 **Resolution Description**
 
-Pending.
+Pending review. Implemented on `rtc-implementation` (commit `1bcf2fe`): a platform-neutral serial RTC/PRAM core (`devel/umac/src/rtc.c`, `devel/umac/include/rtc.h`) connected to the 6522 VIA Port B pins through a new `via_cb.rb_pins` resolved-pin callback, with injectable host time, guest-settable 32-bit 1904-epoch counter, legacy + extended 256-byte PRAM with shared/aliased storage and write protection, and a versioned atomically-replaced backing file persisted across restarts (`-P`, default `pram.nv`). Integrated into `umac_init`/`umac_reset` and the Unix front-end without ROM or low-memory shortcuts; existing VIA/SCSI/keyboard/mouse behaviour preserved. Verified by `umac_rtc_test` (8 isolated cases) and `umac_via_rtc_test` (4 bus-level integration cases), all passing; SCSI tests pass directly. Remaining acceptance items (real Plus ROM pin-transaction capture, edge-timing against hardware trace, System Software retention, unpatched-ROM boot) are explicitly **NOT TESTED** and tracked as future verification. Resolution remains `Pending` until reviewed and accepted.
