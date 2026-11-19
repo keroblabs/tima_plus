@@ -154,7 +154,6 @@ static void rtc_begin_read(rtc_t *r, enum rtc_target_kind kind, int index)
         }
         r->tx_byte = v;
         r->tx_bit = 7;
-        r->data_out = (v >> 7) & 1;
         r->state = RTC_TX_DATA;
         RDBG("[RTC: begin read kind=%d idx=%02x val=%02x]\n", kind, index, v);
 }
@@ -276,14 +275,13 @@ static void rtc_clock_edge(rtc_t *r, int data)
                 break;
 
         case RTC_TX_DATA:
-                /* The current bit was presented before this edge;
-                 * advance to the next, MSB first. */
-                if (r->tx_bit > 0) {
-                        r->tx_bit--;
-                        r->data_out = (r->tx_byte >> r->tx_bit) & 1;
-                } else {
+                /* The Plus ROM samples PB0 after the falling edge.
+                 * Drive bit 7 on the first edge after the command. */
+                r->data_out = (r->tx_byte >> r->tx_bit) & 1;
+                if (r->tx_bit == 0)
                         r->state = RTC_COMPLETE;
-                }
+                else
+                        r->tx_bit--;
                 break;
 
         case RTC_DESELECTED:

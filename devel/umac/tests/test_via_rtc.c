@@ -54,25 +54,25 @@ static void via_pins(int enb, int clk, int data)
 
 static void set_ddrb(uint8_t ddrb) { via_write(ADDR_DDRB, ddrb); }
 
-static void bus_sel(void)
+static void bus_start(void)
 {
         set_ddrb(0x07);          /* PB2/PB1/PB0 outputs */
-        via_pins(1, 0, 0);       /* deselected */
-        via_pins(0, 0, 0);       /* assert enb low -> start */
+        via_pins(1, 1, 0);       /* deselected, clock high */
 }
 
 static void bus_desel(void)
 {
-        via_pins(1, 0, 0);
+        via_pins(1, 1, 0);
 }
 
 static void bus_send(uint8_t byte)
 {
-        set_ddrb(0x07);
+        /* The Plus ROM selects the RTC and sets the first data bit
+         * in the same ORB write that lowers PB1. */
         for (int i = 7; i >= 0; i--) {
                 int bit = (byte >> i) & 1;
-                via_pins(0, 1, bit);
                 via_pins(0, 0, bit);
+                via_pins(0, 1, bit);
         }
 }
 
@@ -80,11 +80,12 @@ static uint8_t bus_recv(void)
 {
         set_ddrb(0x06);          /* PB0 input (RTC drives), PB1/PB2 out */
         uint8_t v = 0;
+        /* ReadRTCByte (Plus V3): lower PB1, raise it, then read PB0. */
         for (int i = 7; i >= 0; i--) {
+                via_pins(0, 0, 0);
+                via_pins(0, 1, 0);
                 uint8_t bit = (uint8_t)(via_read(ADDR_ORB) & 1);
                 v = (uint8_t)((v << 1) | bit);
-                via_pins(0, 1, 0);
-                via_pins(0, 0, 0);
         }
         set_ddrb(0x07);
         return v;
@@ -92,7 +93,7 @@ static uint8_t bus_recv(void)
 
 static uint8_t bus_reg_read(uint8_t cmd)
 {
-        bus_sel();
+        bus_start();
         bus_send(cmd);
         uint8_t v = bus_recv();
         bus_desel();
@@ -101,7 +102,7 @@ static uint8_t bus_reg_read(uint8_t cmd)
 
 static void bus_reg_write(uint8_t cmd, uint8_t value)
 {
-        bus_sel();
+        bus_start();
         bus_send(cmd);
         bus_send(value);
         bus_desel();
@@ -111,7 +112,7 @@ static uint8_t bus_ext_read(uint8_t addr)
 {
         uint8_t prefix = (uint8_t)(0xB8 | ((addr >> 5) & 0x07));
         uint8_t arg = (uint8_t)(((addr & 0x1F) << 2) | 0x01);
-        bus_sel();
+        bus_start();
         bus_send(prefix);
         bus_send(arg);
         uint8_t v = bus_recv();
@@ -123,7 +124,7 @@ static void bus_ext_write(uint8_t addr, uint8_t value)
 {
         uint8_t prefix = (uint8_t)(0x38 | ((addr >> 5) & 0x07));
         uint8_t arg = (uint8_t)(((addr & 0x1F) << 2) | 0x01);
-        bus_sel();
+        bus_start();
         bus_send(prefix);
         bus_send(arg);
         bus_send(value);
@@ -132,13 +133,13 @@ static void bus_ext_write(uint8_t addr, uint8_t value)
 
 static void test_clock_through_via(void)
 {
-        g_host_seconds = 0;
-        uint32_t b0 = bus_reg_read(0x81);
-        uint32_t b1 = bus_reg_read(0x85);
-        uint32_t b2 = bus_reg_read(0x89);
-        uint32_t b3 = bus_reg_read(0x8D);
-        uint32_t s = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
-        CHECK(s == 0x7C25B080u);
+        /* Fixed Linux timestamp from the PLUS-EMU-0009 ROM trace. */
+        g_host_seconds = 1795114880;
+        uint32_t seconds = bus_reg_read(0x9D);
+        seconds = (seconds << 8) | bus_reg_read(0x99);
+        seconds = (seconds << 8) | bus_reg_read(0x95);
+        seconds = (seconds << 8) | bus_reg_read(0x91);
+        CHECK(seconds == 0xE724F800u);
         printf("  test_clock_through_via OK\n");
 }
 
@@ -157,33 +158,17 @@ static void test_pram_through_via(void)
 
 static void test_ddrb_turnaround(void)
 {
-        /* Reference vector 8: after writing a known PB0 output latch,
-         * flipping DDRB bit 0 to input must make PB0 reads reflect the
-         * RTC-driven bit, not the stale output latch. */
+        /* Reference vector 8: the output latch holds 0, then switching
+         * DDRB to input lets the RTC return a byte whose first bit is 1. */
         bus_reg_write(0x41, 0x80);       /* PRAM[0]=0x80 -> MSB read = 1 */
 
-        bus_sel();
+        bus_start();
         bus_send(0xC1);                  /* read PRAM[0] */
-        set_ddrb(0x07);
-        via_pins(0, 0, 1);               /* drive PB0 latch = 1 */
-        set_ddrb(0x06);                  /* turn PB0 to input */
-        /* First response bit (MSB of 0x80) is 1; prove reads track the
-         * device by reading the whole byte back. */
-        uint8_t v = 0;
-        for (int i = 7; i >= 0; i--) {
-                v = (uint8_t)((v << 1) | (via_read(ADDR_ORB) & 1));
-                via_pins(0, 1, 0);
-                via_pins(0, 0, 0);
-        }
-        set_ddrb(0x07);
+        via_pins(0, 1, 0);               /* clear PB0 latch with PB1 high */
+        CHECK((via_read(ADDR_ORB) & 1) == 0);
+        CHECK(bus_recv() == 0x80);
         bus_desel();
-        CHECK(v == 0x80);
 
-        /* With PB0 as output, a plain ORB read returns the latch, not
-         * the device bit. */
-        set_ddrb(0x07);
-        via_pins(1, 0, 1);               /* deselected, PB0 latch = 1 */
-        CHECK((via_read(ADDR_ORB) & 1) == 1);
         printf("  test_ddrb_turnaround OK\n");
 }
 

@@ -60,9 +60,9 @@ static uint8_t drv_recv(struct drv *d)
 {
         uint8_t v = 0;
         for (int i = 7; i >= 0; i--) {
-                v = (uint8_t)((v << 1) | rtc_data_out(d->r));
                 drv_pins(d, 1, 0, 0);     /* PB0 input (RTC drives) */
-                drv_pins(d, 0, 0, 0);     /* falling edge: RTC advances */
+                drv_pins(d, 0, 0, 0);     /* falling edge: RTC presents bit */
+                v = (uint8_t)((v << 1) | rtc_data_out(d->r));
         }
         return v;
 }
