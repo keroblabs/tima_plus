@@ -17,6 +17,7 @@ This document defines how we identify, describe, discuss, fix, review, and close
 - **One master list.** `docs/tasks/task_list.md` is the single index, grouped by category. Its rows link to individual ticket files.
 - **Record decisions and rework.** Notes form a chronological, append-only engineering history, including discarded proposals, review feedback, and reopened issues.
 - **Distinguish evidence from hypotheses.** A suspected defect is permissible, but must be labelled as unverified until confirmed by analysis or tests.
+- **Commit locally; do not push.** Every developer must record implementation or rework in a local `git commit`, then hand off the commit SHA and evidence. The developer must **not** execute `git push`, publish a branch, open a pull request or merge; those actions belong to the project owner after review.
 - **Track implementation commits.** Each issue retains a commit list with branch, short hash, review status, and concise change description.
 - **No silent closure.** A resolved issue must say what changed, how it was verified, and who approved the conclusion.
 
@@ -144,6 +145,8 @@ Keep current Description, Details, and Proposed Change accurate; when editing th
 
 ## 8. Commit tracking and code review
 
+**Mandatory developer handoff rule — local Git commits only.** For every implementation, correction or rework, the developer **must run `git commit`** to capture all intended source, test and accompanying ticket/documentation changes on the designated local working branch. The developer **must not run `git push`** or otherwise publish the commit/branch, open a pull request, or merge it. Stop after the local commit(s), report the short and full commit SHA(s), affected files and executed test evidence to the reviewer/project owner. A local commit is a valid record even while it is not yet present on GitHub; add a GitHub link only after the owner publishes it. The project owner is responsible for reviewing and separately controlling any later push, pull request or merge. This rule does not authorize independent implementation before design approval.
+
 Each individual ticket contains its own **Commits** section, immediately after Proposed Change and before Resolution Description. Record commits that implement, test, revert, or rework that ticket. Documentation-only commits unrelated to a ticket do not need an entry.
 
 Use a table with exactly four columns:
@@ -178,7 +181,7 @@ A single commit may be listed in more than one ticket when it genuinely addresse
 1. **Discover:** inspect the relevant code or baseline and register an `OPEN` ticket with evidence or a clearly marked hypothesis. Create the `db/<ID>.md` file and index row together.
 2. **Triage together:** decide whether it is a real defect, a safety or portability risk, historical residue, or an improvement worth making. Clarify expected behavior and scope; log the decision.
 3. **Agree on a proposed change:** examine alternatives and dependencies, particularly public API, ownership, nonblocking behavior, interrupt masking, allocator use, and affected boards. If the change is not agreed, keep the issue open or defer it.
-4. **Implement:** work only on the designated working branch; make focused changes and reference ticket IDs in commits. Record each relevant commit in the issue's Commits table as `UNREVIEWED`. Do not modify preserved historical baselines.
+4. **Implement and commit locally:** work only on the designated working branch; make focused changes and reference ticket IDs. Finish by running `git commit` locally (for the implementation, tests and related task-record updates). Record each relevant local commit in the issue's Commits table as `UNREVIEWED` and report the SHA(s). **Do not run `git push`, publish a branch, create a PR or merge; stop at the local commit and hand the result to the reviewer/owner.** Do not modify preserved historical baselines.
 5. **Verify:** add or run relevant native tests, build checks, static review, and board/ISR-specific checks as appropriate. Record exactly what passed, failed, or could not be tested. A build alone is not proof of interrupt safety.
 6. **Review:** set the issue to `REVIEW`, review relevant commits, update their review statuses, and examine implementation, API behavior, edge cases, ownership, interrupt-state restoration, error paths, and evidence. Log review findings and rework.
 7. **Accept and close:** after explicit approval, set `RESOLVED` with a complete resolution; set `CLOSED` once integrated into the designated branch or the approved no-change disposition is complete. Update `task_list.md` at each transition.
@@ -207,6 +210,7 @@ Document which tests **passed**, were **reported by another developer but not in
 - Existing roadmap IDs stay reserved even when not formally opened in this tracker. Opening a ticket early does not change the roadmap's execution order.
 - Do not batch unrelated defects into one ticket. Keep corrective fixes and discretionary redesign separate when acceptance criteria differ.
 - Keep dated append-only Notes and superseded commit records. Do not silently erase prior decisions or transfer review approval to a different SHA.
+- Require a local `git commit` for every developer change; **never `git push` from the developer workflow**. Publication, PRs and merges are project-owner actions after review.
 - Implementations require explicit acceptance evidence; a successful compile alone is not proof of hardware correctness or enough to close a ticket.
 - Preserve the shared Tima 6.x SDK and its ownership boundaries; emulator-specific concerns stay with the emulator.
 

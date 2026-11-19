@@ -1,52 +1,64 @@
+
 # Tima/Plus — IWM Emulation Architecture and Behaviour
 
-**Status:** Engineering decision record / working design for project-owner review; not an implementation sign-off  
-**Recorded:** 19 November 2026  
-**Target:** Macintosh Plus M0001AP, original MC68000, original IWM and unmodified Macintosh Plus ROM  
-**Primary work:** `PLUS-EMU-0003`; proposed follow-on virtual-media work `PLUS-EMU-0009` (identifier not yet formally opened)  
+**Status:** Architecture and two-phase implementation scope approved by project owner; implementation pending
+**Recorded:** 19 November 2026; read-only/write implementation split approved 19 November 2026
+**Target:** Macintosh Plus M0001AP, original MC68000, original IWM and unmodified Macintosh Plus ROM
+**Implementation tickets:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) (Phase 1: read-only) and [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) (Phase 2: writes)
 **Companions:** [Introduction](00-introduction.md) · [Development Roadmap](01-development-roadmap.md) · [Unicorn–uMac Integration](02-unicorn-umac-integration.md)
 
-## 1. Purpose and decision summary
+## 1. Purpose and approved decisions
 
-This document records the IWM engineering discussions of 18–19 November 2026. It clarifies the agreed direction before implementation tickets are raised. It supersedes any *sequencing or architectural assumptions* in the companion documents that imply the STM32F411/Unicorn firmware is required before a fully working, unmodified-ROM virtual floppy can be demonstrated. Companion documents have **not yet been edited** to reflect this decision.
+This document records the IWM discussions of 18–19 November 2026 and the subsequently approved **two-component, two-phase virtual floppy** plan. It supersedes earlier sequencing assumptions requiring STM32F411/Unicorn or a physical drive emulator before original-ROM virtual-floppy boot. The companion roadmap documents have not yet been reconciled with this updated sequencing.
 
-**Agreed direction:**
+1. **Two software components:** a register/timing-oriented **IWM behaviour model** (`iwm.c/.h`) and an independent **virtual disk/drive model** (`floppy_drive.c/.h`). Their names and API signatures are proposed, not mandatory pre-existing files.
+2. **Phase 1 — `PLUS-EMU-0003`: read-only.** Disable ROM patching in the authentic execution path, execute the unmodified Macintosh Plus ROM and its own `.Sony` driver; implement the software-visible IWM read/control behaviour, drive control/sense, and a circular encoded track buffer populated from a standard 800K logical `.dsk` using 6-and-2 packing and GCR codeword mapping. **Stub the IWM/disk write path:** no track modification, no persistence and no claim of write support. Present the mounted medium as write-protected during this phase.
+3. **Phase 2 — `PLUS-EMU-0010`: write-capable.** Implement real IWM write-handshake/buffering and overwrite the circular track stream at its current bit position. Mark changed tracks dirty. On stepping to a different track or changing head/side, decode and validate changes, reverse GCR and 6-and-2, and store modified logical sectors back into the `.dsk`. Also flush safely on eject, medium replacement and orderly shutdown; avoid writes when the track is clean.
+4. **The IWM is an independent time-driven register device.** It owns Q6/Q7, mode, latch/rearm, register reads/writes and any hardware-equivalent handshakes; it does not decode disk sectors or access `.dsk` files.
+5. **The disk is a bitstream-backed virtual device.** It owns tracks/sides, addressable drive control/sense, an encoded circular bitstream with explicit bit length/phase, and logical-sector image translation. It does not interpret MC68000 memory addresses or implement ROM shortcuts.
+6. **Future production firmware is separate.** The initial backend models the logical encoded stream, **not** physical motor/head mechanics, analogue flux, or electrical WRDATA/RDDATA waveforms. The physical STM32-only versus STM32+ATF1508 choice remains deliberately open; the earlier 4× SPI waveform idea has been dropped. No ATF1508-to-STM32 SPI framing is selected by this document.
 
-1. First implement the Macintosh IWM's software-visible control, status, asynchronous read, write-handshake, and timing behaviour in uMac.
-2. Connect the IWM to a deliberately simple **timed encoded-track source/sink**, backed initially by a normal logical 800K `.dsk` image. This is **not** an attempt to emulate the Sony MFD-51W mechanism or its electromechanical design.
-3. Prove the **unmodified** Macintosh Plus ROM and its **original** `.Sony` driver can initialize the controller, recognize an inserted disk, read sectors and boot original System Software. Then validate writes, read-back, formatting and persistence.
-4. Only **after the IWM and virtual-media reference implementation work**, substitute the downstream stream backend with the host bridge, Unicorn STM32F411 execution, production firmware and production-compatible SPI-NOR image (`PLUS-EMU-0007`). Preserve the IWM/ROM endpoint.
-5. The firmware/ATF1508 interface and the eventual physical circuit are separate validation targets. Successful emulator operation does not establish electrical or physical timing compatibility.
+Preserve the existing paravirtual `.Sony` implementation only as an **explicitly selected legacy regression mode** if it remains useful. The authentic mode must never call `rom_patch()` or rely on `PV_SONY_ADDR`; the original ROM bytes must remain unchanged. Do not confuse the unmodified ROM's `.Sony` driver with the host-side replacement in `disc.c`.
 
-**Naming convention:** call the new backend the **virtual floppy stream engine**, **encoded-track engine**, or **timed track-stream backend**. Do **not** call it a “Sony MFD-51W emulator”. In authentic mode the original ROM `.Sony` driver runs unchanged; the *host-side paravirtual Sony replacement* currently in `disc.c` is bypassed. We are not removing the original ROM driver.
-
-## 2. Architectural boundaries
+## 2. Two independent software components
 
 ```text
-                 Original Macintosh Plus ROM
-                     Original .Sony driver
-                               |
-                   Memory-mapped IWM access
-                               |
-                      IWM model (iwm.c)
-             soft switches, mode, data latch,
-            write buffer/handshake, status, time
-                               |
-            drive control/sense + timed bitstream
-                               |
-            +------------------+---------------------+
-            |                                        |
-      INITIAL BACKEND                         FUTURE BACKEND
-      Encoded-track engine                    Host IWM-to-SPI bridge
-      800K logical .dsk                       Unicorn STM32F411
-      Circular stream/position                Production ARM firmware
-      Encode on load                          SPI-NOR device model
-      Capture/decode writes                   Exact raw-flash image
+             UNMODIFIED Macintosh Plus ROM
+                Original .Sony driver
+                         |
+               Memory-mapped IWM
+                         |
+           +-------------v--------------+
+           | iwm.c / iwm.h              |
+           | Soft switches, Q6/Q7,      |
+           | mode, read latch, clock,   |
+           | sense and ROM-visible I/O  |
+           | Phase 1: write STUB        |
+           | Phase 2: write handshake   |
+           +-------------+--------------+
+                         |
+          timed read/write encoded bits
+          + drive controls / sense values
+                         |
+           +-------------v--------------+
+           | floppy_drive.c / .h        |
+           | Track/side, selection,     |
+           | circular bit buffer,      |
+           | bit phase, dirty flag      |
+           | 6-and-2 + GCR mapping      |
+           +-------------+--------------+
+                         |
+               800K logical .dsk
+             (512-byte sector payloads)
+               Phase 1: read-only
+               Phase 2: dirty-track flush
 ```
 
-The IWM remains a distinct, permanently reusable component. The virtual backend should not implement Q6/Q7 or manufacture IWM read/write register values directly; only the IWM decides what the MC68000 observes. Conversely, the IWM should not parse Macintosh logical block requests or operate directly on the filesystem.
+**Design rule:** a CPU access does not request the “next byte from the disk”. The Macintosh clock advances an independent track bit position; the IWM reconstructs the bytes presented to ROM read-data polling. Each ordinary eight-bit GCR codeword takes 128 C8M ticks, but synchronization fields require bit-level representation and alignment.
 
-The initial backend represents the **observable stream delivered to/from the IWM**, not an accurate motor, head servo, rotating platter, magnetic flux or physical cabling simulation. Model only those logical drive controls and sense responses that the ROM needs (drive selection, disk-in-place, write protection, head/track/side and related signals), without conflating those with the IWM register logic. Precise drive command/sense mappings must be checked against the documentation and ROM usage.
+**API direction (illustrative only):** the disk component can expose clock/position advancement, one-bit reads and writes, drive-control/sense operations and dirty-track flush; the IWM consumes these rather than fetching 512-byte sectors. The byte-oriented 6-and-2 and GCR code belongs only to the disk component.
+
+**Phase-1 write stub:** switch/register accesses required during probing or initialization still produce coherent state, but a write request must not alter the bitstream or image. With the virtual medium advertised as write-protected, unexpected write attempts should be logged or rejected without falsely reporting successful durable writes. Full timed write acceptance, bitstream modification and underrun correctness are **Phase 2** responsibilities.
 
 ## 3. Evidence: what the unmodified ROM actually does
 
@@ -70,7 +82,7 @@ Here `A4` addresses the IWM read-data register (`Q6L` with Q7 low). In the selec
 
 The data-field routines process approximately **699 encoded data codewords plus four checksum codewords**, in addition to marks, sector number, synchronization/gaps and trailing marks; these are **not** a 703-byte FIFO transfer from the mechanism. The original driver decodes the payload progressively.
 
-### 3.2 Write operation
+### 3.2 Write operation — ROM evidence for Phase 2
 
 `Sony_WrData` changes IWM state from sense to write/load, then repeats:
 
@@ -145,7 +157,7 @@ Keep separate:
 - underrun condition/status (bit 6; verify exact polarity/lifetime);
 - entry into writing, ongoing transfer, final write splice and exit.
 
-The ROM expects the **IWM** to determine when the next byte can be accepted. First-byte entry from sense mode and final-byte drain must be checked separately. The track backend captures the timed output at the **current stream position**, not necessarily the position of the last CPU read.
+The ROM expects the **IWM** to determine when the next byte can be accepted. First-byte entry from sense mode and final-byte drain must be checked separately. The track backend captures the timed output at the **current stream position**, not necessarily the position of the last CPU read. This full write state machine belongs to **Phase 2**; Phase 1 implements only the safe, non-mutating write stub and register mode transitions.
 
 ## 5. Clocking: the key design decision
 
@@ -205,57 +217,95 @@ void track_advance_to(uint64_t now_ticks);
 
 A circular encoded track has an independent angular/bit position. Between accesses, its position advances by elapsed ticks; reads can poll repeatedly with no new complete byte, and delayed reads cannot recover an unlimited backlog. Keep sub-byte phase and handle power/track transitions in the state machine.
 
-## 6. Virtual media backend — subsequent milestone
 
-After isolated IWM tests, read a normal **819,200-byte logical 800K `.dsk` image** (80 tracks, two sides, zone-dependent sectors-per-track: 12/11/10/9/8). Encode the selected track into the exact on-disk codeword, address-field, data-field, sync, checksum and gap sequence needed by the original ROM, and present it through the timed stream source. No filesystem-level shortcut is allowed in authentic mode.
+## 6. Virtual 800K media and circular track buffer
 
-Writes are captured into the circular stream **starting at the currently elapsed bit/byte position when writing begins**. Afterward the backend can decode and validate changed records and commit logical sector data to `.dsk`. For the duration of a run it may need to retain track-level features a logical `.dsk` cannot represent; do not claim a logical image can preserve arbitrary sync/gap or malformed-track modifications. Formatting must be exercised as an actual stream operation, not replaced by a high-level “format done” response.
+### 6.1 Phase 1: logical .dsk to timed encoded track
 
-**Terminology deferred:** 6-and-2 packing, GCR codeword mapping, tag bytes and checksums need a dedicated detailed encoding discussion before implementation of the track encoder. For orientation only, “6-and-2” describes the byte packing and six-bit values, while GCR maps such values to legal disk codewords; these are related stages, not two independent full-sector transfer protocols. This document does **not** freeze the on-flash 703-byte record layout or full sync/gap arrangement.
+Input is a standard **819,200-byte logical 800K `.dsk`**: 80 cylinder tracks, two sides, with 12/11/10/9/8 sectors per track in five 16-track zones. It contains 512-byte logical sectors, **not** a recording of their on-disk self-sync, prologues, checksums or timing.
 
-## 7. Future STM32F411 / Unicorn endpoint
+For the selected track **and side**, the disk component:
 
-Once the initial reference backend passes the unmodified ROM, substitute a backend that delivers IWM-level events through the **defined** ATF1508-facing SPI transaction contract to the exact production STM32F411 firmware under Unicorn, with the production-format SPI NOR image.
+1. Reads the corresponding 512-byte logical sectors from the image (honouring the correct zone and sector ordering).
+2. Applies Macintosh Sony 6-and-2 packing and maps six-bit symbols to legal GCR codewords, producing the required sector data and tag representation; computes the correct checksums.
+3. Constructs the proper address fields, sector-data fields, prologues/epilogues, **self-synchronization**, gaps and interleave. Self-sync includes bit lengths not necessarily divisible by eight; do not substitute a plain byte array without retaining valid bit count and phase.
+4. Packs the resulting stream into an allocated **circular bit buffer** with explicit valid-bit length, track/side identity and continuously advancing rotational position.
+5. Supplies bits at a nominal one bit cell per **16 elapsed C8M ticks** regardless of MC68000 polls; when read mode is active, the IWM assembles/latches codewords according to the original hardware/ROM contract.
+6. On a head step or side change, selects/rebuilds the appropriate encoded buffer; in Phase 1 there is no dirty data to flush.
 
-**The nominal IWM codeword cadence remains 128 C8M ticks.** This sets the external stream's event spacing, **not automatically the SPI peripheral clock rate or duration of each SPI transaction**. SPI end-of-transfer/completion must correspond to the real agreed framing and capacity of the bridge, while ensuring the IWM stream has advanced on its own independent clock. Do not declare the physical SPI transfer itself to take exactly 128 C8M ticks before that protocol is specified.
+An implementation may cache multiple (track, side) buffers, but **must not** require a whole-disk encoded cache. Rebuilding on track change is acceptable so long as time advancement, side selection and the original ROM's expected drive status remain coherent. No host filesystem-level sector shortcut may satisfy authentic-ROM IWM reads.
 
-No ATF1508 RTL simulation is needed for software integration; physical circuit/timing validation remains separate. A reference IWM implementation tested with both backends is preferable to duplicating IWM logic in firmware-facing host code.
+The `.Sony` driver runs within the unmodified ROM and performs its original on-the-fly GCR decoding. The host-side disk emulator **encodes data for reading** because a logical `.dsk` does not already contain these encoded fields.
 
-## 8. Implementation sequence and proposed acceptance gates
+### 6.2 Phase 2: serial writes to circular bit positions
 
-The identifiers below refer to *programme concepts* until individual records are formally opened under `docs/tasks/db/`; do not silently create/close unrelated tickets.
+The original ROM converts its logical sector payload into encoded codewords and writes them into IWM registers. The IWM write shift register emits the corresponding timed **logical encoded bits** to the disk model. It is not necessary for this internal software boundary to turn those bits into physical pin-level NRZI WRDATA transitions and back again.
 
-| Gate | Proposed work | Evidence |
+- Overwrite the **existing circular bitstream** at the position corresponding to elapsed time, respecting bit-level alignment, write-mode entry/exit, sync fields and wraparound; never append bytes or treat writes as 512-byte disk operations.
+- Mark a track **dirty only if its encoded contents actually change**, and preserve the distinction between in-memory mutations and committed image data.
+- **Primary flush trigger:** before committing a head-step change to a new track. Also handle changing side, drive selection or media, eject, motor-off where appropriate, and clean emulator shutdown. A same-track read/write should observe pending changes from the circular buffer without reloading stale `.dsk` contents.
+- During flush, find complete valid sector records, validate address/data prologues and checksums, perform inverse GCR mapping and 6-and-2 decoding, and update the correct **512-byte logical sector payloads** in the `.dsk`. Avoid writing anything if the track is clean.
+- Do **not** rewrite the `.dsk` merely because the rotational pointer advanced; do not silently discard a dirty track when decoding or saving fails. If a flush fails, preserve/retry the in-memory data when possible and report a clear error. Ensure clean shutdown/eject does not lose data.
+- A standard logical `.dsk` cannot preserve arbitrary raw gaps, invalid codewords or nonstandard tag data. Define and document any nonrepresentable modification or formatting limitation; do not pretend those bytes were losslessly saved.
+- Exercise sector writing and read-after-write first, then standard ROM-driven formatting using actual write streams, with explicit acceptance for persistence after reopening.
+
+Read-only and write-capable modes should use the **same** circular stream representation and drive API. The Phase-1 stub is replaced/extended in Phase 2; do not introduce a second high-level `.Sony` replacement.
+
+### 6.3 Encoding terminology
+
+6-and-2 **packs** the Mac data/tag bytes into six-bit values; GCR **maps** those values into legal eight-bit disk codewords. Both operations are performed by the original ROM on a write and by our disk backend when synthesizing a track for a read; the inverse operations convert received encoded sectors back to 512-byte logical payloads at flush. The IWM only serializes/recovers the encoded bitstream and implements register-level handshakes. Exact bit layout, interleave, sync length, sector number and checksum algorithms must be unit-tested against documented Mac 800K examples and the unmodified ROM; do not freeze an assumed raw-SPI-flash layout here.
+
+
+## 7. Future STM32F411 / Unicorn endpoint (not selected yet)
+
+The initial deliverable is the **IWM + virtual disk + logical `.dsk`** reference. Later, the disk-side backend can be replaced by an interface driven by the actual STM32F411 production firmware running under Unicorn and a production-compatible SPI-NOR image, without rewriting the IWM behaviour visible to the Macintosh ROM.
+
+**No physical drive interface has been selected.** Both STM32-only timed capture/generation and STM32+ATF1508 external logic remain options; we have discarded the proposed 4× SPI waveform-sampling approach. The physical IWM WRDATA pin toggles its level on each encoded logical `1`, while the IWM reads falling RDDATA pulses; those electrical representations are distinct from the internal logical encoded bits. The forthcoming hardware contract must account for pulse timing, bit recovery, control-register multiplexing and possible SPI transfer framing only after that design is investigated.
+
+The nominal Macintosh bitstream cadence remains 16 C8M ticks per bit / 128 ticks per ordinary 8-bit codeword. No direct equality between a future SPI transaction's duration and that cadence has been specified. The physical circuit requires independent electrical and timing validation; this two-phase emulation work does **not** settle the STM32/ATF1508 question.
+
+
+## 8. Two implementation tickets and acceptance gates
+
+Both tickets are formally opened under `docs/tasks/db/`. **Phase 2 depends on Phase 1**, but both are documented now to keep the component interface stable.
+
+| Phase / ticket | Scope | Required acceptance evidence |
 |---|---|---|
-| A — IWM register model (`PLUS-EMU-0003`) | Decode all 16 switches, mode `$1F`, Q6/Q7, motor/drive select, status/SENSE; authentic ROM option | Unmodified ROM gets through IWM initialization; no `PV_SONY_ADDR` calls |
-| B — Timed IWM data and write-handshake (`PLUS-EMU-0003`) | Synthetic timed stream, read latch/rearm, write buffer and underrun; deterministic virtual timestamps | Headless tests of read/write polling, missed bytes, mode transitions, reset, sequential transfers |
-| C — Virtual 800K media backend (proposed `PLUS-EMU-0009`) | Logical `.dsk` to circular encoded track; drive control/sense | Original ROM/`.Sony` reads sectors from a real disk image and boots historical System Software |
-| D — Media mutation (same backend ticket) | Stream-positioned writes, read-back, format, persistence, cross-zone tests | Sector checksums, read-after-write, full track/format, disk image persists and reopens |
-| E — Production bridge (`PLUS-EMU-0007`) | Unicorn STM32F411 binary and hardware-facing SPI/flash models | Unmodified ROM boots, reads, writes and formats via production firmware and exact raw-NOR image |
-| F — Physical validation | Actual ATF1508 + STM32F411 drive replacement | Real M0001AP electrical/timing and media compatibility |
+| **Phase 1 — [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md)** | Disable ROM patching for authentic mode; implement IWM soft switches, mode `$1F`, status, read latch/rearm, elapsed-clock progression; supply drive control/sense from a circular encoded track built from logical `.dsk`. **Write stub only**, medium reported write-protected. | Original **unmodified ROM** and original `.Sony` driver start, recognize the image, read across zones/sides and boot known-good 800K System Software. Read-only tests, byte/bit sync tests, reset/timing traces. The loaded ROM image is verified unchanged; no `PV_SONY_ADDR` calls in authentic mode. |
+| **Phase 2 — [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md)** | Replace write stub with IWM write buffer/handshake/underrun and bit-positioned circular writes; dirty-track flags; decode/checksum and persist changed logical sectors on step/side change and safe lifecycle events. | Original `.Sony` writes, read-after-write, dirty/clean flush, persistence after image reopen, failed-save recovery and standard formatting as specified. No sector-level bypass. |
+| **Later — PLUS-EMU-0007** | Actual STM32 production firmware under Unicorn, separate media endpoint | Repeat ROM read/write/boot tests through firmware and production-compatible raw flash image. |
+| **Later — physical drive prototype** | Macintosh IWM pin-level compatibility with whichever hardware architecture is selected | Real-Mac measurement and electrical compatibility; emulator-only evidence is insufficient. |
 
-Tests should include varied polling intervals, CPU stall intervals, boundary conditions, alternative start-of-track phases, retries and deliberate write underruns. Trace at least PC, IWM address/read/write data, Q6/Q7/motor/mode, global virtual tick, stream bit/byte position, latch/handshake states and result; record original ROM identity and emulator commit.
+Keep the two phases independently reviewable. Synthetic bitstream and status tests are necessary but are **not** substitutes for the original-ROM boot (Phase 1) or disk-image write/persistence (Phase 2) milestones. Trace PC, IWM address/data, Q6/Q7/mode, global virtual tick, track/side/bit position, latch and handshake states, dirty state and outcomes. Record ROM identity, emulator revision, test fixtures and explicit pass/fail/not-tested outcomes.
 
-**The original ROM is the software acceptance authority**. Patched uMac/Basilisk-derived paravirtual disk code remains a *separate regression baseline*, never a pass for authentic IWM/media behaviour.
+The original ROM is the software acceptance authority. Existing patched/paravirtual uMac floppy support is a regression baseline only and **never counts as authentic IWM completion**.
 
-## 9. Current repository observations (as of this decision record)
 
-In `devel/umac/src/main.c`, IWM access still uses a 16-byte `iwm_regs` array; reads of switch 8 return `$FF` and switch 14 `$1F`, with most operations unimplemented. The IWM address window is decoded in `devel/umac/include/machw.h`.
+## 9. Current repository observations (before the implementation)
 
-`devel/umac/src/rom.c` patches the Mac Plus V3 ROM checksum path and replaces the ROM `.Sony` driver. `devel/umac/src/disc.c` handles the paravirtual disk path. `devel/umac/src/unix_main.c` currently calls `rom_patch()` during startup. **Authentic mode must skip all ROM patching**, preserving the untouched image bytes; the old patched mode stays independently runnable.
+At the time of this design decision, `devel/umac/src/main.c` still implements IWM access through a mostly stubbed 16-byte `iwm_regs` array. The IWM access window is decoded in `devel/umac/include/machw.h`.
 
-`devel/umac/src/via.c` currently stubs the timer tick; VIA Timer 2 and other timer functions required by ROM drive control remain follow-up scope. The working SCSI work (`PLUS-EMU-0004` and `PLUS-EMU-0005`) is the architectural precedent: controller + storage target, tested separately. Its branch/PR merge and the project owner's required review must not be presumed complete by this document.
+The current `devel/umac/src/rom.c` has ROM patching that replaces the ROM `.Sony` driver; `devel/umac/src/disc.c` implements the current paravirtual floppy path; `devel/umac/src/unix_main.c` calls `rom_patch()`. **Phase 1 must make unmodified-ROM execution the authentic path and disable `rom_patch()` there completely**, not merely skip the replacement floppy entrypoint while leaving other ROM modifications in place. Preserve original ROM bytes; retain an explicit legacy regression option if useful.
+
+SCSI `PLUS-EMU-0004` and `PLUS-EMU-0005` and RTC/PRAM `PLUS-EMU-0009` are already closed following project-owner verification/merge. **`PLUS-EMU-0009` is not available** for virtual floppy work; the write ticket is `PLUS-EMU-0010`.
+
+This document and the issue tickets are a **design/documentation change only**. They do not claim new emulator builds, tests, read-only boot or write support have been executed.
+
 
 ## 10. Open verification questions — do not convert to assumptions
 
-1. Confirm **exact** IWM asynchronous latch, acknowledgement, read-register rearming and the reported 14-FCLK delay against primary specification text; identify FCLK vs C8M precisely.
-2. Confirm motor-off delay, write mode transition, write buffer-empty/underrun polarity and clearing rules, including different mode bits and error conditions actually exercised by the original ROM.
-3. Determine cycle-level phase of memory-mapped accesses under Musashi and whether a lightweight memory-bus timing model is sufficient; quantify video/sound RAM contention and separate IWM/VIA/SCC bus acknowledgement timing.
-4. Capture original ROM sequences for drive select, PH lines, VIA SEL, ready/sense, head movement, side and inserted/write-protect status; define a minimal but credible stream-backend signal contract.
-5. Determine exact handling of self-sync bit patterns and stream alignment, then specify 6-and-2/GCR encoder and on-disk track layout in a separate review.
-6. Design persistence semantics for modified logical sectors versus arbitrary track edits; define format and malformed-track test fixtures.
-7. Specify the ATF1508-to-STM32 SPI framing and completion semantics **after** the direct IWM/reference backend is working, not before.
+1. Confirm IWM read-latch, acknowledgement and rearm timing (including the specified 14-FCLK-period delay), and distinguish it from the virtual C8M tick counter.
+2. Confirm the IWM mode `$1F` and every required PH/Q6/Q7/drive-sense interaction in the unmodified ROM. For Phase 1, implement enough write-register stub behaviour for safe read-only operation, **not** the future timed write state machine.
+3. Measure or model when Musashi memory callbacks occur within CPU instructions; advance the independent track clock despite emulated bus stalls and avoid cumulative timing drift.
+4. Validate exact zone sector ordering, sector headers, 6-and-2/GCR/checksum algorithms, ten-bit self-sync structure, interleave and circular track bit length for the selected `.dsk` fixtures.
+5. Determine the least invasive way to disable all ROM patching in authentic mode while preserving the prior patched/paravirtual regression route.
+6. For Phase 2, define how to handle incomplete/invalid rewritten records, nonrepresentable tags/gaps, format operations and failed track flushes without silent image corruption.
+7. Defer hardware choices: physical clock recovery, motor-speed PWM relevance, STM32 timers versus ATF1508, SPI framing and pin-level timing remain independent investigations and are **not prerequisites** to these two software tickets.
 
-## 11. Next review/implementation action
 
-Review this document, particularly §§4–5 and the open questions. Once agreed, open the detailed `PLUS-EMU-0003` IWM implementation ticket and separately formalize the virtual-media ticket (tentatively `PLUS-EMU-0009`) using the project bug/task methodology. Update the roadmap, introduction and Unicorn-integration document to reflect the **direct virtual floppy before STM32** sequencing. **No implementation code or task-status changes are authorized by this documentation-only commit.**
+## 11. Review and implementation handoff
+
+The project owner has approved the **two-component design** and **two-ticket read-only-then-write sequence**. Proceed using [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) as the first bounded change; use [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) only after Phase 1 has a stable, tested bitstream/drive contract. Implementers must follow the [task methodology](tasks/bug-tracking-methodology.md): make **local `git commit`(s)** for implementation changes, **do not `git push`**, and report commit SHAs and test evidence for review. The owner controls subsequent publication and merge.
+
+The development roadmap and companion documents can be reconciled in a separately reviewed documentation change. No emulator source code, physical board choice or task-completion state is changed by recording these tickets.
+
