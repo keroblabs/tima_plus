@@ -314,7 +314,7 @@ The development roadmap and companion documents can be reconciled in a separatel
 
 **Implementation authority:** This section makes the two-component design actionable for [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) (read-only) and [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) (write). It describes **what we emulate to satisfy the Macintosh Plus ROM**, not a full transistor-level IWM, Sony motor controller or Apple II disk interface.
 
-**Source priority:** (1) the [original Mac Plus ROM .Sony disassembly](https://github.com/jonathanschilling/mac_rom/blob/main/plus/resources/res_drvr_sony.s), especially \`Sony_AdrDisk\`, \`Sony_Sense\`, \`Sony_Pulse\`, \`Sony_Seek\`, \`Sony_Recal\`, \`Sony_PowerUp\`, \`Sony_PowerDown\`, \`Sony_FigTrkSpd\` and \`Sony_RdAddrSetup\`; (2) Apple IWM/SWIM and Macintosh hardware documentation; (3) independent engineering comparisons with [BMOW Floppy Emu CPLD](https://github.com/una1veritas/mac-floppy-emu/blob/master/floppy-emu-source-1.0L-F11/CPLD-Xilinx/floppyemu.v) and [ESFloppy's Sony interface](https://github.com/alexthecat123/ESFloppy/blob/main/ESFloppy/sonyInterface.cpp). Neither secondary implementation is a reason to skip original-ROM testing.
+**Source priority:** (1) the [original Mac Plus ROM .Sony disassembly](https://github.com/jonathanschilling/mac_rom/blob/main/plus/resources/res_drvr_sony.s), especially `Sony_AdrDisk`, `Sony_Sense`, `Sony_Pulse`, `Sony_Seek`, `Sony_Recal`, `Sony_PowerUp`, `Sony_PowerDown`, `Sony_FigTrkSpd` and `Sony_RdAddrSetup`; (2) Apple IWM/SWIM and Macintosh hardware documentation; (3) independent engineering comparisons with [BMOW Floppy Emu CPLD](https://github.com/una1veritas/mac-floppy-emu/blob/master/floppy-emu-source-1.0L-F11/CPLD-Xilinx/floppyemu.v) and [ESFloppy's Sony interface](https://github.com/alexthecat123/ESFloppy/blob/main/ESFloppy/sonyInterface.cpp). Neither secondary implementation is a reason to skip original-ROM testing.
 
 ### 12.1 Two levels of control: IWM versus Sony 3.5-inch drive
 
@@ -327,54 +327,54 @@ A Macintosh 3.5-inch Sony drive does **not** directly receive four stepping-moto
 | IWM PH2 | CA2 | Read-register address high bit **or** data value for write commands |
 | IWM PH3 | LSTRB | Drive-control **write strobe**; normally pulse high then low |
 | VIA Port A bit 5 | SEL / head-select | Extra Sony register address bit; selects read-data side 0 or 1 when addressing the data registers |
-| IWM Drive-Sel | Internal/external position | Choose \`/ENBL1\` for internal or \`/ENBL2\` for external |
-| IWM Motor-On latch | Drive-enable gate | Gate selected active-low \`/ENBLx\`; **not the drive's spindle-motor command** |
+| IWM Drive-Sel | Internal/external position | Choose `/ENBL1` for internal or `/ENBL2` for external |
+| IWM Motor-On latch | Drive-enable gate | Gate selected active-low `/ENBLx`; **not the drive's spindle-motor command** |
 | IWM Q6/Q7 | IWM register selector | Select the IWM data/status/handshake/write registers; not a Sony register |
 | Sony read output | RD / sense function | Provide selected drive's status bit, TACH or encoded read stream |
 | IWM WRDATA and /WRREQ | Sony serial write interface | Phase 2; abstract to timed logical encoded bits in the virtual emulator |
 
-The Plus original ROM sets **VIA PA5** through \`Sony_AdrDisk\`. The current \`devel/umac/src/main.c::via_ra_changed()\` already identifies PA5 as \`hd.sel\` in a comment, but does not yet deliver it to the virtual floppy. **Phase 1 must connect this path.** Do not lose the other VIA PA functions, including ROM overlay and SCC status.
+The Plus original ROM sets **VIA PA5** through `Sony_AdrDisk`. The current `devel/umac/src/main.c::via_ra_changed()` already identifies PA5 as `hd.sel` in a comment, but does not yet deliver it to the virtual floppy. **Phase 1 must connect this path.** Do not lose the other VIA PA functions, including ROM overlay and SCC status.
 
 The system has **two logically distinct motor/enables**:
 
 1. **IWM Motor-On + Drive-Sel** chooses which /ENBLx is asserted; a selected and enabled drive is addressable.
-2. **Sony MOTORON register** is a *separate* command sent using PH0–PH3 and PA5. Value \`0\` starts the spindle; value \`1\` stops it.
+2. **Sony MOTORON register** is a *separate* command sent using PH0–PH3 and PA5. Value `0` starts the spindle; value `1` stops it.
 
-The original ROM's \`Sony_PowerUp\` selects/enables the drive, queries whether its motor is running, and **strobes the Sony MOTORON command** if not. \`Sony_PowerDown\` sends the Sony motor-off command and subsequently clears the IWM enable. Emulating only the IWM motor soft switch would be incorrect.
+The original ROM's `Sony_PowerUp` selects/enables the drive, queries whether its motor is running, and **strobes the Sony MOTORON command** if not. `Sony_PowerDown` sends the Sony motor-off command and subsequently clears the IWM enable. Emulating only the IWM motor soft switch would be incorrect.
 
 ### 12.2 How the Sony drive registers are addressed and read
 
 The drive sees **one enabled position** and four address/control bits. PH3 should be **low** for an ordinary read/sense operation:
 
-\`\`\`c
+```c
 // PHx and SEL are one-bit current line values.
 // This number is the Sony drive READ register, not an IWM MMIO index.
 unsigned reg = (PH2 << 3) | (PH1 << 2) | (PH0 << 1) | VIA_PA5_SEL;
-\`\`\`
+```
 
-The ROM's \`Sony_AdrAndSense\` first selects the Sony register using \`Sony_AdrDisk\`; it then selects the **IWM status register** (Q6=1, Q7=0), reads its **bit 7** (SENSE), and returns to IWM read-data mode. No step or motor command happens merely from these address changes.
+The ROM's `Sony_AdrAndSense` first selects the Sony register using `Sony_AdrDisk`; it then selects the **IWM status register** (Q6=1, Q7=0), reads its **bit 7** (SENSE), and returns to IWM read-data mode. No step or motor command happens merely from these address changes.
 
 **Read-register map, physical index above (Mac Plus 800K subset):**
 
 | Index | Function | Required sense/data behaviour |
 | ---: | --- | --- |
-| 0 | \`DIRTN\` | Direction latch; \`0\` inward (towards track 79), \`1\` outward (towards track 0) |
-| 1 | \`/CSTIN\` | \`0\` when disk inserted; \`1\` when no medium |
-| 2 | \`/STEP\` | \`0\` step busy; \`1\` step complete/ready |
-| 3 | \`/WRPROT\` | \`0\` write protected; \`1\` writable; **Phase 1: mounted media are write protected** |
-| 4 | \`/MOTORON\` | \`0\` Sony spindle on; \`1\` off |
-| 5 | \`/TK0\` | \`0\` head at cylinder 0; \`1\` elsewhere |
-| 6 | \`EJECT\` sense | Respond compatibly; **reading never initiates an eject** |
-| 7 | \`TACH\` | A **time-dependent** tachometer level, 60 pulses per revolution, not a fixed or per-read toggle |
-| 8 | \`RDDATA0\` | Encoded bitstream from head/side **0** when read is enabled and the spindle is running |
-| 9 | \`RDDATA1\` | Encoded bitstream from head/side **1** (800K drive) |
+| 0 | `DIRTN` | Direction latch; `0` inward (towards track 79), `1` outward (towards track 0) |
+| 1 | `/CSTIN` | `0` when disk inserted; `1` when no medium |
+| 2 | `/STEP` | `0` step busy; `1` step complete/ready |
+| 3 | `/WRPROT` | `0` write protected; `1` writable; **Phase 1: mounted media are write protected** |
+| 4 | `/MOTORON` | `0` Sony spindle on; `1` off |
+| 5 | `/TK0` | `0` head at cylinder 0; `1` elsewhere |
+| 6 | `EJECT` sense | Respond compatibly; **reading never initiates an eject** |
+| 7 | `TACH` | A **time-dependent** tachometer level, 60 pulses per revolution, not a fixed or per-read toggle |
+| 8 | `RDDATA0` | Encoded bitstream from head/side **0** when read is enabled and the spindle is running |
+| 9 | `RDDATA1` | Encoded bitstream from head/side **1** (800K drive) |
 | 10–11 | SuperDrive-specific/reserved | No 1.44MB/MFM support; confirm the conservative 800K response from ROM probes |
-| 12 | \`SIDES\` | \`1\`: double-sided 800K drive |
-| 13 | \`/READY\` | \`0\` ready; \`1\` not ready, spinning up or seeking |
-| 14 | Drive installed/present | \`0\` drive installed; \`1\` no drive |
+| 12 | `SIDES` | `1`: double-sided 800K drive |
+| 13 | `/READY` | `0` ready; `1` not ready, spinning up or seeking |
+| 14 | Drive installed/present | `0` drive installed; `1` no drive |
 | 15 | Interface/handshake detection | New-interface 800K behaviour; polarity to match original ROM's probe, not guessed |
 
-**Naming pitfall:** the *original ROM passes a different four-bit number* to \`Sony_AdrDisk\`: \`D0[3:0] = {CA1, CA0, SEL, CA2}\`. For example the ROM's parameter \`TachAdr=$E\` maps to physical **read index 7**, *not* physical index 14. Compare the actual pin bits, not just similarly named numeric register constants.
+**Naming pitfall:** the *original ROM passes a different four-bit number* to `Sony_AdrDisk`: `D0[3:0] = {CA1, CA0, SEL, CA2}`. For example the ROM's parameter `TachAdr=$E` maps to physical **read index 7**, *not* physical index 14. Compare the actual pin bits, not just similarly named numeric register constants.
 
 When index 8 or 9 is selected, the drive output carries **read-data information** and the IWM's serial reader reconstructs codewords. For other indices, the drive output provides a **status/tach/sense** value and the CPU observes it via IWM status bit 7. Do **not** give the IWM a new codeword just because a sense register was polled.
 
@@ -382,31 +382,31 @@ When index 8 or 9 is selected, the drive output carries **read-data information*
 
 ### 12.3 Command writes: PH3 controls *when* movement occurs
 
-A drive-register command is **not** an IWM data-register write. The ROM sets PH0/PH1, VIA PA5 and PH2, and invokes \`Sony_Pulse\` to generate a **PH3 high→low strobe**, with two NOPs for the high pulse width:
+A drive-register command is **not** an IWM data-register write. The ROM sets PH0/PH1, VIA PA5 and PH2, and invokes `Sony_Pulse` to generate a **PH3 high→low strobe**, with two NOPs for the high pulse width:
 
-\`\`\`c
+```c
 // Evaluate only on PH3/LSTRB's rising edge, for an enabled drive.
 unsigned cmd_reg = (PH1 << 2) | (PH0 << 1) | VIA_PA5_SEL;
 bool cmd_value = PH2;
-\`\`\`
+```
 
 | Write index | Name | Behaviour |
 | ---: | --- | --- |
-| 0 | \`DIRTN\` | Set direction latch: \`0\` step in (+1 track); \`1\` step out (−1 track). **Does not move the head** |
-| 2 | \`STEP\` | Written value \`0\` requests **one** step in latched direction; \`/STEP\` becomes busy and later ready |
-| 4 | \`MOTORON\` | \`0\` starts spindle; \`1\` stops spindle |
-| 6 | \`EJECT\` | \`1\` requests eject (original ROM holds an extended strobe/command); maintain correct disk-in-place state, and in Phase 2 flush before removal |
+| 0 | `DIRTN` | Set direction latch: `0` step in (+1 track); `1` step out (−1 track). **Does not move the head** |
+| 2 | `STEP` | Written value `0` requests **one** step in latched direction; `/STEP` becomes busy and later ready |
+| 4 | `MOTORON` | `0` starts spindle; `1` stops spindle |
+| 6 | `EJECT` | `1` requests eject (original ROM holds an extended strobe/command); maintain correct disk-in-place state, and in Phase 2 flush before removal |
 | Other | Extensions/reserved | No movement and no invented success; add only if original ROM uses them |
 
 **A change of PH0, PH1, PH2, VIA SEL or IWM Drive-Sel alone does not move the head**. One valid **rising** PH3 edge triggers at most one command; PH3 remaining high across multiple reads cannot produce multiple steps. PH3 falling ends the pulse. If no drive is enabled or present, strobing does not modify any other drive.
 
-The ROM's \`Sony_AdrDisk\` raises CA0 and CA1 before changing PA5/SEL, then lowers whichever address bits are needed. Preserve individual soft-switch and VIA events in order; do not decode a command on every address-line change. Avoid false commands during initialization/reset, or when changing drives.
+The ROM's `Sony_AdrDisk` raises CA0 and CA1 before changing PA5/SEL, then lowers whichever address bits are needed. Preserve individual soft-switch and VIA events in order; do not decode a command on every address-line change. Avoid false commands during initialization/reset, or when changing drives.
 
 ### 12.4 Required virtual-drive state and track-step algorithm
 
 Each logical drive position requires **its own** state. Suggested minimum (illustrative C structure; not a frozen API):
 
-\`\`\`c
+```c
 typedef struct {
     bool drive_installed;
     bool disk_inserted;
@@ -421,31 +421,31 @@ typedef struct {
     // track bit count, circular position, track cache, TACH phase;
     // Phase 2 adds stream dirty/flush state.
 } sony_drive_t;
-\`\`\`
+```
 
-\`iwm.c\` owns PH0–PH3, Q6/Q7, mode and IWM drive-enable selection; \`floppy_drive.c\` owns the above Sony controls, cylinder/side, track stream and image. **Do not duplicate an unrelated “enabled spindle” flag**: IWM /ENBL and Sony MOTORON are distinct, but related.
+`iwm.c` owns PH0–PH3, Q6/Q7, mode and IWM drive-enable selection; `floppy_drive.c` owns the above Sony controls, cylinder/side, track stream and image. **Do not duplicate an unrelated “enabled spindle” flag**: IWM /ENBL and Sony MOTORON are distinct, but related.
 
 **One accepted STEP command** (command index 2, value 0, PH3 rising, selected drive enabled, not busy):
 
 1. Read the direction previously set through command 0.
-2. Set \`step_busy=true\`: drive read register 2 (\`/STEP\`) now returns **0**; /READY can report not-ready until settle.
-3. Compute \`target = clamp(cylinder + (step_out ? -1 : +1), 0, 79)\`. **Never wrap around** at cylinder 0 or 79.
+2. Set `step_busy=true`: drive read register 2 (`/STEP`) now returns **0**; /READY can report not-ready until settle.
+3. Compute `target = clamp(cylinder + (step_out ? -1 : +1), 0, 79)`. **Never wrap around** at cylinder 0 or 79.
 4. If target changes, switch to/rebuild the target's encoded circular track. In Phase 2, **flush the old track first if dirty**; do not discard it if decode/save fails. Both heads change cylinder together.
-5. Using **virtual C8M elapsed time**, complete the step at a nonzero scheduled deadline. Return \`/STEP=1\`, and update \`/TK0\` from \`cylinder==0\`. /READY follows its own motor and settling conditions.
+5. Using **virtual C8M elapsed time**, complete the step at a nonzero scheduled deadline. Return `/STEP=1`, and update `/TK0` from `cylinder==0`. /READY follows its own motor and settling conditions.
 
-**Timing:** The original \`Sony_Seek\` checks /STEP ready, writes direction, issues a single STEP pulse and waits for completion per cylinder. \`Sony_Recal\` uses 6 ms per step for its “new-interface” drive path and 12 ms for older drives; the 800K path polls /STEP and /READY. Use a bounded millisecond-scale step-completion delay as an initial emulation policy, then tune against **unmodified-ROM traces**. Do not call a fixed delay an established electrical measurement or substitute host \`sleep()\`. If a step command arrives while busy, reject/ignore with trace rather than double-step.
+**Timing:** The original `Sony_Seek` checks /STEP ready, writes direction, issues a single STEP pulse and waits for completion per cylinder. `Sony_Recal` uses 6 ms per step for its “new-interface” drive path and 12 ms for older drives; the 800K path polls /STEP and /READY. Use a bounded millisecond-scale step-completion delay as an initial emulation policy, then tune against **unmodified-ROM traces**. Do not call a fixed delay an established electrical measurement or substitute host `sleep()`. If a step command arrives while busy, reject/ignore with trace rather than double-step.
 
 **Recalibration is not a shortcut.** The original ROM loops: test /TK0 (read index 5), if not zero set DIRTN=1 (out), confirm /STEP ready, pulse STEP=0, wait, repeat until /TK0=0 (or ROM timeout). A virtual drive may initialize at cylinder 0 as a documented power-on policy, but it must support a genuine multi-step recalibration from any other valid cylinder in deterministic tests.
 
-**Side selection is not track movement.** The 800K drive has 80 cylinders and two heads. A change between Sony read register 8 and 9 selects the other head **at the same cylinder**. PA5/SEL also selects many other *status registers*; changing it during status polling must not erroneously permanently switch heads or step cylinders. Retain the selected encoded-track identity as \`(drive, cylinder, side)\`.
+**Side selection is not track movement.** The 800K drive has 80 cylinders and two heads. A change between Sony read register 8 and 9 selects the other head **at the same cylinder**. PA5/SEL also selects many other *status registers*; changing it during status polling must not erroneously permanently switch heads or step cylinders. Retain the selected encoded-track identity as `(drive, cylinder, side)`.
 
 ### 12.5 Drive selection, motor, ready and tachometer
 
-- **Drive select:** \`IWM_DRIVE_SEL=0\` means internal \`/ENBL1\`; \`=1\` means external \`/ENBL2\`. \`IWM_MOTOR_ON=0\` deasserts both. When enabled, only the selected position responds. The ROM probes internal/external positions independently; even if Phase 1 mounts one image, maintain a coherent absent external response.
+- **Drive select:** `IWM_DRIVE_SEL=0` means internal `/ENBL1`; `=1` means external `/ENBL2`. `IWM_MOTOR_ON=0` deasserts both. When enabled, only the selected position responds. The ROM probes internal/external positions independently; even if Phase 1 mounts one image, maintain a coherent absent external response.
 - **Spindle:** start/stop only from Sony command index 4; a merely asserted /ENBL does not mean the spindle has already achieved speed. Model a spin-up/ready transition. A motor-off command stops delivering encoded bits and running TACH; it must not reset cylinder or silently erase the track.
-- **READY:** Sony read index 13 is **active low**. It should reflect a present installed drive and its current motor/settling state, not a hardcoded permanent ready bit. The ROM's \`Sony_WaitReady\` checks it after initial wait and then polls.
-- **TACH:** Sony index 7 is a **time-derived periodic level**, nominally 60 pulses per revolution; the ROM's \`Sony_FigTrkSpd\` measures 15 pulses with **VIA Timer 2**, including timeout. Do not toggle TACH merely on each read. Use a documented speed-zone table and verify the ROM-observed period; nominal published speeds are around 394, 429, 472, 525 and 590 RPM, with discrepancies for the innermost band across references. Treat those as calibration inputs, not exact proof.
-- **VIA Timer 2 integration:** if the unmodified-ROM path uses \`Sony_FigTrkSpd\`, T2 count and IFR timeout must advance on the same virtual timeline. Avoid faking the ROM's return value or polling result. The ROM's other VBL/Time Manager motor/seek waits may also require existing VIA work.
+- **READY:** Sony read index 13 is **active low**. It should reflect a present installed drive and its current motor/settling state, not a hardcoded permanent ready bit. The ROM's `Sony_WaitReady` checks it after initial wait and then polls.
+- **TACH:** Sony index 7 is a **time-derived periodic level**, nominally 60 pulses per revolution; the ROM's `Sony_FigTrkSpd` measures 15 pulses with **VIA Timer 2**, including timeout. Do not toggle TACH merely on each read. Use a documented speed-zone table and verify the ROM-observed period; nominal published speeds are around 394, 429, 472, 525 and 590 RPM, with discrepancies for the innermost band across references. Treat those as calibration inputs, not exact proof.
+- **VIA Timer 2 integration:** if the unmodified-ROM path uses `Sony_FigTrkSpd`, T2 count and IFR timeout must advance on the same virtual timeline. Avoid faking the ROM's return value or polling result. The ROM's other VBL/Time Manager motor/seek waits may also require existing VIA work.
 - **PWM:** the separate Macintosh PWM signal controls older 400K spindle speed; it is **not the nominal 489,600-bit/s IWM stream clock**. The Plus 800K Sony drive has its own speed regulation; physical PWM waveform generation is outside this Phase-1 virtual-drive model.
 
 ### 12.6 Proposed software events and timing order
@@ -456,13 +456,13 @@ For **every** IWM access or relevant VIA PA write:
 
 1. Advance both IWM and floppy virtual time to the **current virtual C8M timestamp**. Retire any step-complete, spin-up/ready or TACH deadlines, and advance the circular read position even if the CPU was doing unrelated work.
 2. On an IWM soft-switch access, update exactly the targeted PH, drive-select, Motor-On, Q6 or Q7 latch. If PH3 makes a genuine low→high transition, decode the Sony command and strobe only the enabled drive.
-3. On VIA Port A bit 5 change, update the selected Sony \`SEL\` line at that timestamp. Preserve the port's other functions. Its value participates immediately in read-register selection and subsequent PH3 command decode.
+3. On VIA Port A bit 5 change, update the selected Sony `SEL` line at that timestamp. Preserve the port's other functions. Its value participates immediately in read-register selection and subsequent PH3 command decode.
 4. If Q7/Q6 select **IWM status**, return mode/enable and the selected drive's **one-bit SENSE**. If they select IWM **read-data**, return the asynchronous read latch filled from the continuous encoded stream only when Sony read function 8/9 is active and disk/spindle/enable conditions hold.
 5. On a CPU write to the IWM encoded-data register, **Phase 1 stubs the write safely**, without changing track or file (and reports media write-protected). **Phase 2** must implement the actual timed holding register, serial write shift, handshake/underrun and bit-position overwrite.
 
 **Illustrative API only, not prescribed exact prototypes:**
 
-\`\`\`c
+```c
 void iwm_advance_to(uint64_t c8m_ticks);
 uint8_t iwm_read_mmio(uint32_t address, uint64_t c8m_ticks);
 void iwm_write_mmio(uint32_t address, uint8_t data, uint64_t c8m_ticks);
@@ -473,7 +473,7 @@ void floppy_drive_command(unsigned drive, unsigned cmd, bool value,
 bool floppy_drive_sense(unsigned drive, unsigned reg, uint64_t c8m_ticks);
 int floppy_drive_get_bit(unsigned drive, unsigned side, uint64_t c8m_ticks);
 // Phase 2: timed write_bit() and flush_dirty_track() endpoints.
-\`\`\`
+```
 
 These API boundaries mean that IWM handles the **software-visible parallel/serial controller**, and floppy_drive handles **Sony drive commands, stream and logical image**. Neither may intercept ROM logical-sector calls or mutate the ROM.
 
@@ -481,7 +481,7 @@ These API boundaries mean that IWM handles the **software-visible parallel/seria
 
 The developer shall capture events (real ROM PCs and virtual ticks) covering at least the following expected *kinds* of behaviour; the precise interleaving depends on the original ROM, and must not be imposed as a fake script:
 
-\`\`\`text
+```text
   ROM initializes IWM in mode $1F without any ROM patch.
   Drive-Sel=0; IWM Motor-On=1 -> /ENBL1 asserted.
   Sony MOTORON sense reads 1 when stopped.
@@ -495,7 +495,7 @@ The developer shall capture events (real ROM PCs and virtual ticks) covering at 
   IWM read latch delivers timed GCR codewords; original .Sony decodes.
   Sony TACH sense produces timed edges; VIA T2 counts them if used.
   Sony MOTORON=1 then IWM Motor-On=0: spindle off, /ENBLx off.
-\`\`\`
+```
 
 Emit a compact trace of: **ROM PC, elapsed C8M clock, IWM address/soft-switch, Q6/Q7, PH0–PH3, VIA PA5, Drive-Sel, /ENBL1/2, Sony read/write register number and CA2 command value, direction, cylinder, side, spindle, step/ready deadlines, TACH, bit position and read-latch result**. Use this to diagnose unexpected commands and timeouts.
 
@@ -509,13 +509,13 @@ Emit a compact trace of: **ROM PC, elapsed C8M clock, IWM address/soft-switch, Q
 | Direction | Strobe DIRTN=0/1 | Direction changes; cylinder does not |
 | Single step | Strobe STEP=0, advance virtual time | One cylinder change, busy→ready and /TK0 correct |
 | Track boundaries | Step out at 0 and inward at 79 | Cylinder clamped, never wraps, no wrong-side change |
-| Recalibration | Start at nonzero cylinder, run original \`Sony_Recal\` | ROM genuinely steps outward to /TK0 without emulator shortcut |
+| Recalibration | Start at nonzero cylinder, run original `Sony_Recal` | ROM genuinely steps outward to /TK0 without emulator shortcut |
 | Head selection | Read RDDATA0 then RDDATA1 | Same cylinder, distinct side 0/1 encoded streams |
 | Motor/ready | Enable, read motor, command motor on/off | Separate IWM enable and Sony spindle state; /READY and TACH reflect elapsed time |
 | TACH & VIA T2 | Sample under independently advanced time | Correct periodicity and timer/IFR operation; no per-read toggle |
 | Track geometry | Seek across zone transitions 15→16, 31→32, 47→48, 63→64 | Correct sector count, circular bit length, address fields and GCR payload for each zone |
-| Phase-1 write stub | Attempt guest write to mounted image | Guest sees write protection; circular track and \`.dsk\` remain unchanged |
-| Authentic boot | Identified unmodified ROM + known-good 800K boot image | Original .Sony reads/boots via IWM, no \`rom_patch()\`, no \`PV_SONY_ADDR\` path |
+| Phase-1 write stub | Attempt guest write to mounted image | Guest sees write protection; circular track and `.dsk` remain unchanged |
+| Authentic boot | Identified unmodified ROM + known-good 800K boot image | Original .Sony reads/boots via IWM, no `rom_patch()`, no `PV_SONY_ADDR` path |
 
 All checks must be deterministic under the **virtual clock**, not sleeps or instant “success” responses. Unit tests alone do not close Phase 1: an **original-ROM boot through the real .Sony driver** remains mandatory.
 
@@ -523,4 +523,4 @@ All checks must be deterministic under the **virtual clock**, not sleeps or inst
 
 Do **not** implement a complete Apple II IWM, 5.25-inch phase-stepper, high-density SWIM/MFM, analogue magnetic flux, physical WRDATA NRZI/RDDATA pulses, STM32 peripherals, ATF1508 RTL, the 400K PWM speed loop or an HD20 daisy-chain controller as part of the Phase-1 IWM. We need only the subset of **Mac Plus 800K IWM and Sony drive behaviour exercised by the original ROM**. Unused register values or modes should be logged and justified, not blindly hardcoded to “ready”.
 
-The exact IWM read-latch 14-FCLK rearm condition, Musashi intra-instruction timestamping, spin-up and step completion delay, innermost-zone tach period, 800K interface/handshake sense polarity, VIA timer use and logical \`.dsk\` ordering require **ROM-trace/specification validation**. These are defined verification work, **not** permissions to bypass ROM checks. Phase 2 must preserve the same drive-control state machine and add timed write transmission, bit-positioned circular overwrites, dirty-track flush on a cylinder/side/lifecycle transition and sector decoding as detailed in §6.
+The exact IWM read-latch 14-FCLK rearm condition, Musashi intra-instruction timestamping, spin-up and step completion delay, innermost-zone tach period, 800K interface/handshake sense polarity, VIA timer use and logical `.dsk` ordering require **ROM-trace/specification validation**. These are defined verification work, **not** permissions to bypass ROM checks. Phase 2 must preserve the same drive-control state machine and add timed write transmission, bit-positioned circular overwrites, dirty-track flush on a cylinder/side/lifecycle transition and sector decoding as detailed in §6.
