@@ -1,12 +1,12 @@
 # PLUS-EMU-0009 — Implement Macintosh Plus serial RTC and battery-backed PRAM
 
 **ID:** `PLUS-EMU-0009`  
-**Status:** `RESOLVED`
+**Status:** `CLOSED`
 **Title:** Implement Macintosh Plus serial RTC and battery-backed PRAM
 
 **Description**
 
-At discovery, uMac had no Macintosh Plus real-time clock (RTC) or battery-backed parameter RAM behind VIA Port B. Commit `1bcf2fe` implemented that hardware path, and the project owner confirmed that uMac displayed a clock with a time that differed from Linux. The ROM trace identified a one-bit shift in each response byte. The RTC/VIA timing correction passed the recorded ROM and System Software verification. Engineering review then identified two **PRAM backing-file safety risks**: unvalidated/aliased destinations and concurrent-instance collisions. The requested persistence rework was committed as `8e1a265` and independently reviewed and **approved** on 19 November 2026. The implementation is **RESOLVED, pending project-owner merge to `main`**. [Original implementation](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de)
+At discovery, uMac had no Macintosh Plus real-time clock (RTC) or battery-backed parameter RAM behind VIA Port B. Commit `1bcf2fe` implemented that hardware path, and the project owner confirmed that uMac displayed a clock with a time that differed from Linux. The ROM trace identified a one-bit shift in each response byte. The RTC/VIA timing correction passed the recorded ROM and System Software verification. Engineering review then identified two **PRAM backing-file safety risks**: unvalidated/aliased destinations and concurrent-instance collisions. The requested persistence rework was committed as `8e1a265` and independently reviewed and **approved** on 19 November 2026. The implementation was approved, merged to `main` in [PR #2](https://github.com/keroblabs/tima_plus/pull/2) and manually tested successfully by the project owner on `main`. The ticket is **CLOSED**. [Original implementation](https://github.com/keroblabs/tima_plus/commit/1bcf2fed25218fdc85598d261d2de6686402a7de)
 
 The M0001AP is a Macintosh Plus and has a real RTC. The goal is a **Macintosh Plus–accurate, VIA-connected serial RTC**, taking its initial time from the Linux host clock, with a 32-bit seconds counter and **256 bytes of persistent PRAM**. This must be observable by the Mac Plus ROM through normal 6522 register accesses; it must not be a paravirtual date/time API, direct low-memory patch, or replacement of guest RTC routines.
 
@@ -229,6 +229,8 @@ Persistence now distinguishes a missing file (`RTC_PRAM_MISSING`, eligible for f
 
 - **2026-11-19 — Independent rework review and approval:** Examined commit [`8e1a265`](https://github.com/keroblabs/tima_plus/commit/8e1a265d1f818d703f82bd345fd538c896b8114e), including path resolution/alias checks in `unix_main.c`, the RTC read/validate/save and sidecar `flock` mechanisms in `rtc.c`, the CMake test registration and both new/updated tests. Accepted `EMU9-R2` and `EMU9-R3` as addressed, based on source inspection and the recorded six-test pass, with **no independently executed tests** in this review. The mitigation is more extensive (~430 added lines across RTC persistence and Unix frontend) than essential for a small 272-byte PRAM file; directory syncing and other conservative checks are arguably optional, but nothing in the reviewed change justifies more rework. Do **not** churn stable code simply to reduce line count. Keep future emulator review scope proportionate: separate required hardware correctness/data-safety from optional hardening. Owner's previously reported System 6 clock/host-time match remains accepted manual evidence; the latest offscreen clock sample is only partial and does not replace it. Updated commit `8e1a265` to `APPROVED`, findings `EMU9-R2/R3` to `ACCEPTED`, and ticket `REVIEW` → `RESOLVED`; **merge to `main` is still pending**.
 
+- **2026-11-19 — Owner merge and post-merge acceptance:** [PR #2 — Rtc implementation](https://github.com/keroblabs/tima_plus/pull/2) was **merged into `main`** at [`a772bea`](https://github.com/keroblabs/tima_plus/commit/a772bea95d08c9e14cdd5a40fa6afb087bff97bf). The project owner explicitly reported that the **merged `main` branch was tested and all was good**; this is owner-supplied manual acceptance evidence (not a separately executed review test). Final state: all RTC/PRAM implementation and review findings accepted; `RESOLVED` → `CLOSED`. No further changes requested.
+
 **Proposed Change**
 
 Introduce a dedicated, independently testable Macintosh Plus 256-byte RTC/PRAM device connected to the 6522 VIA Port B serial pins with proper DDR handling, command state machine, seconds-since-1904 counter based on Linux time, guest-settable time, persisted battery-backed PRAM/clock anchor, and coherent 1 Hz VIA notifications. Integrate without direct-ROM or low-memory shortcuts, retain patched uMac mode and SCSI/floppy compatibility, and satisfy the acceptance matrix above.
@@ -247,7 +249,7 @@ For `EMU9-R1`, load the response byte at command completion and drive one bit on
 
 **Resolution Description**
 
-**RESOLVED — accepted 19 November 2026; integration pending merge to `main`.**
+**CLOSED — accepted, merged and verified on `main` on 19 November 2026.**
 
 The previously missing Macintosh Plus 343-0042-B-class RTC and battery-backed 256-byte PRAM are implemented in `devel/umac/src/rtc.c`/`include/rtc.h`, wired to the VIA Port B PB2/PB1/PB0 interface (including DDRB turn-around) and the Linux host-time provider, with persistent clock offset and PRAM backing. The host's system time is not changed by the guest.
 
@@ -257,4 +259,4 @@ The previously missing Macintosh Plus 343-0042-B-class RTC and battery-backed 25
 
 **Known limitations:** No physical logic-analyzer edge timing or unpatched-ROM IWM boot claim; these remain separate milestones. PRAM is saved on clean emulator exit, so changes since the last save can be lost on an abrupt termination. The persistence hardening is conservative, arguably more complex than necessary for a small PRAM file, but accepted rather than requesting simplification churn.
 
-**Integration:** Branch `rtc-implementation` is approved for the project owner's final merge to `main`. Change the ticket and master index to `CLOSED` **only after** that merge is verified; record the PR/merge commit and any final manual results.
+**Integration and closure:** [PR #2](https://github.com/keroblabs/tima_plus/pull/2) merged `rtc-implementation` into `main` at [`a772bea`](https://github.com/keroblabs/tima_plus/commit/a772bea95d08c9e14cdd5a40fa6afb087bff97bf). Project-owner mandatory post-merge test on `main` was reported **successful** (exact test commands not supplied). Ticket and master index closed; no outstanding implementation-review changes.
