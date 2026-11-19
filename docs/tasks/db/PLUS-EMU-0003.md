@@ -1,7 +1,7 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `IN_PROGRESS`
+**Status:** `REVIEW`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
@@ -94,6 +94,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 - **2026-11-19 — Regression and Protection Tests:** `EMU3-A2` through `EMU3-A4` and `EMU3-A6` passed. Generated-image tests decoded all 1,600 sectors, checked ten-bit sync and wrap, and compared the encoded track and raw file after a rejected IWM write. The ROM returned `wPrErr` for a sector write and the input hashes were unchanged. The boot test exercised display, mouse movement and key down/up. The existing SCSI controller, disk, original-ROM SCSI Manager, RTC and PRAM tests passed. The prepared `HD10_512.hda` booted SCSI-only to Finder with the unmodified ROM and the image SHA-256 remained `d3796a03029cdb3a71b9f943375ee6e711541e2dc0c7406694d3913fc7fc2d53`. The four HFS image converter tests passed.
 - **2026-11-19 — Build and Coexistence Tests:** All ten CTest cases passed at 1 MiB and 4 MiB of RAM. The standalone Make build linked and exposed the SDL CLI. With the 800K floppy and the read-only `320_32MB_drive.hda` both attached, System 6.0.8 booted and its volume queue contained `System Tools` and `3.2 32MB (D)`. The hard-disk SHA-256 stayed `fd03fdc74308848200c18d4690ef2db8159df7c650255e826ab56a3779236481`.
 - **2026-11-19 — Sanitizer Tests:** Corrected `EMU3-R3` in the Musashi opcode templates. All ten CTest cases then passed under ASan and UBSan with `halt_on_error=1` for UBSan. Leak detection was disabled because LeakSanitizer could not attach in the sandbox.
+- **2026-11-19 — Verification and Status Change:** The SDL loader rejected a 1.44 MB floppy and a corrupted V3 ROM before creating RAM or PRAM output. The implementation and tests are in local commit `427e0d2`. All six acceptance checks have developer evidence. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 
 **Proposed Change**
 
@@ -103,6 +104,7 @@ Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. L
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `plus-emu-0003-iwm` | `427e0d2` | `UNREVIEWED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
 
 **Resolution Description**
 
