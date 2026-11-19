@@ -185,6 +185,20 @@ A single commit may be listed in more than one ticket when it genuinely addresse
 
 If a test later exposes a regression, reopen the original issue when it concerns the same root cause; otherwise open a new issue and cross-reference it.
 
+### Recording review findings and required follow-up
+
+After each substantive review, retain a **Review Findings** subsection under **Details**, with a small current-action table: `Finding ID`, `Classification`, `Evidence`, `Required action / acceptance evidence`, `State`. This is not a second ticket or master index. Append a dated Notes entry describing the review, evidence and disposition. Do not erase previous notes or commit history.
+
+Distinguish the following rather than treating every unfinished requirement as a bug:
+
+- **`CORRECTION_REQUIRED`:** a specific in-scope implementation/API defect identified by inspection or test. Give the failure path and a precise corrective test. Mark affected implementation commits `CHANGES_REQUESTED` if applicable.
+- **`VERIFICATION_REQUIRED`:** an acceptance criterion lacks sufficient evidence. Record the missing test, source/media prerequisites and result **`NOT TESTED`**; do not call it a failure or imply code changes are necessary.
+- **`FUTURE_SCOPE`:** an optional or subsequent milestone requirement. Link the owning roadmap/ticket, and do not enlarge the current ticket without explicit approval.
+
+Keep the ticket in `REVIEW` while review feedback is documented and verification is pending. Return it to `IN_PROGRESS` **when the agreed correction or further testing actively starts**; after new commits/evidence, return it to `REVIEW`. A separate `REWORK_REQUIRED` status is unnecessary. Per-commit review state is independent: `CHANGES_REQUESTED` for concrete corrections, `IN_REVIEW` where evidence is still incomplete, and `APPROVED` only after explicit acceptance.
+
+Document which tests **passed**, were **reported by another developer but not independently reproduced**, **failed**, or were **NOT TESTED**. If an optional or resource-dependent integration test is not run, explicitly decide whether it blocks this ticket or belongs to another milestone. A blocking acceptance criterion prevents `RESOLVED`; an expressly agreed out-of-scope limitation does not automatically prevent closure. Open a new ticket only for a genuinely separable issue, not for correcting the same implementation under review. Once complete, mark findings `VERIFIED`, `DEFERRED` or `ACCEPTED_LIMITATION` with rationale and evidence.
+
 ## 10. Consistency and scope controls
 
 - `task_list.md` is the **one master index**, grouped by category; `db/<ID>.md` is the **one authoritative record** for its ticket.

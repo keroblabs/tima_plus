@@ -1,0 +1,8 @@
+{
+    "cmake.sourceDirectory": "/home/marcio/Projects/platform/tima_plus/devel/umac",
+    
+    "cmake.debugConfig": {
+        "preLaunchTask": "setup-wayland-env",
+        "envFile": "${workspaceFolder}/.wayland.env"
+    }
+}

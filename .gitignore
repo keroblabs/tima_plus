@@ -5,4 +5,10 @@ devel/umac/System70_boot.dsk
 devel/umac/build-cmake/
 devel/umac/ram.bin
 devel/umac/rom.bin
+devel/umac/320_32MB_drive.hda
+kiosk-macplus/
 
+build/
+devel/umac/HD10_512.hda
+devel/umac/kiosky.hda
+ram.bin

@@ -5,7 +5,7 @@
  * Main file with:
  * - umac_ entry points,
  * - main loop,
- * - address decoding/memory map, dispatch to VIA/SCC/disc
+ * - address decoding/memory map, dispatch to VIA/SCC/IWM/SCSI/disc
  * - Keyboard/mouse event dispatch
  *
  * Copyright 2024 Matt Evans
@@ -46,6 +46,7 @@
 #include "scc.h"
 #include "rom.h"
 #include "disc.h"
+#include "scsi5380.h"
 
 #ifdef PICO
 #include "pico.h"
@@ -337,21 +338,46 @@ uint8_t iwm_read(unsigned int address)
 
 ////////////////////////////////////////////////////////////////////////////////
 
+static inline bool rom_output_enabled(unsigned int address)
+{
+        /* A17 drives the Plus ROMs' active-low output enable. The ROM
+         * compares the undriven $420000 and the mirror at $440000 to
+         * tell a Plus with SCSI from an older machine. */
+        return IS_ROM_WINDOW(address) && !(address & 0x020000);
+}
+
+static inline unsigned int rom_read_byte(unsigned int address)
+{
+        return rom_output_enabled(address) ? ROM_RD8(address & (ROM_SIZE - 1)) : 0xff;
+}
+
+static inline unsigned int rom_read_word(unsigned int address)
+{
+        if (address & 1)
+                return (rom_read_byte(address) << 8) | rom_read_byte(address + 1);
+        return rom_output_enabled(address) ? ROM_RD_ALIGNED_BE16(address & (ROM_SIZE - 1)) : 0xffff;
+}
+
+static inline unsigned int rom_read_long(unsigned int address)
+{
+        return (rom_read_word(address) << 16) | rom_read_word(address + 2);
+}
+
 static unsigned int  FAST_FUNC(cpu_read_instr_normal)(unsigned int address)
 {
         /* Can check for 0x400000 (ROM) and otherwise RAM */
         if ((address & 0xf00000) != ROM_ADDR)
                 return RAM_RD_ALIGNED_BE16(CLAMP_RAM_ADDR(address));
         else
-                return ROM_RD_ALIGNED_BE16(address & (ROM_SIZE - 1));
+                return rom_read_word(address);
 }
 
 static unsigned int  FAST_FUNC(cpu_read_instr_overlay)(unsigned int address)
 {
         /* Need to check for both 0=ROM, 0x400000=ROM, and RAM at 0x600000...
          */
-        if (IS_ROM(address))
-                return ROM_RD_ALIGNED_BE16(address & (ROM_SIZE - 1));
+        if (IS_ROM_WINDOW(address))
+                return rom_read_word(address);
         else /* RAM */
                 return RAM_RD_ALIGNED_BE16(CLAMP_RAM_ADDR(address));
 }
@@ -364,8 +390,8 @@ unsigned int    FAST_FUNC(cpu_read_byte)(unsigned int address)
         /* Most likely a RAM access, followed by a ROM access, then I/O */
         if (IS_RAM(address))
                 return RAM_RD8(CLAMP_RAM_ADDR(address));
-        if (IS_ROM(address))
-                return ROM_RD8(address & (ROM_SIZE - 1));
+        if (IS_ROM_WINDOW(address))
+                return rom_read_byte(address);
 
         // decode IO etc
         if (IS_VIA(address))
@@ -374,6 +400,12 @@ unsigned int    FAST_FUNC(cpu_read_byte)(unsigned int address)
                 return iwm_read(address);
         if (IS_SCC_RD(address))
                 return scc_read(address);
+        if (IS_SCSI(address)) {
+                if (address & 1)
+                        return 0;
+                return SCSI_DACK(address) ? ncr5380_pseudo_dma_read()
+                                          : ncr5380_read_register(SCSI_REG(address));
+        }
         if (IS_DUMMY(address))
                 return 0;
 
@@ -385,9 +417,12 @@ unsigned int    FAST_FUNC(cpu_read_word)(unsigned int address)
 {
         if (IS_RAM(address))
                 return RAM_RD16(CLAMP_RAM_ADDR(address));
-        if (IS_ROM(address))
-                return ROM_RD16(address & (ROM_SIZE - 1));
+        if (IS_ROM_WINDOW(address))
+                return rom_read_word(address);
 
+        /* SCSI reads use the upper lane: one NCR access per 68000 word cycle. */
+        if (IS_SCSI(address))
+                return (address & 1) ? 0 : cpu_read_byte(address) << 8;
         if (IS_TESTSW(address))
                 return 0;
 
@@ -399,9 +434,15 @@ unsigned int    FAST_FUNC(cpu_read_long)(unsigned int address)
 {
         if (IS_RAM(address))
                 return RAM_RD32(CLAMP_RAM_ADDR(address));
-        if (IS_ROM(address))
-                return ROM_RD32(address & (ROM_SIZE - 1));
+        if (IS_ROM_WINDOW(address))
+                return rom_read_long(address);
 
+        if (IS_SCSI(address)) {
+                if (address & 1)
+                        return 0;
+                unsigned int high = cpu_read_word(address);
+                return (high << 16) | cpu_read_word(address + 2);
+        }
         if (IS_TESTSW(address))
                 return 0;
 
@@ -414,8 +455,8 @@ unsigned int    cpu_read_word_dasm(unsigned int address)
 {
         if (IS_RAM(address))
                 return RAM_RD16(CLAMP_RAM_ADDR(address));
-        if (IS_ROM(address))
-                return ROM_RD16(address & (ROM_SIZE - 1));
+        if (IS_ROM_WINDOW(address))
+                return rom_read_word(address);
 
         exit_error("Disassembler attempted to read word from address %08x", address);
         return 0;
@@ -425,8 +466,8 @@ unsigned int    cpu_read_long_dasm(unsigned int address)
 {
         if (IS_RAM(address))
                 return RAM_RD32(CLAMP_RAM_ADDR(address));
-        if (IS_ROM(address))
-                return ROM_RD32(address & (ROM_SIZE - 1));
+        if (IS_ROM_WINDOW(address))
+                return rom_read_long(address);
 
         exit_error("Dasm attempted to read long from address %08x", address);
         return 0;
@@ -454,6 +495,15 @@ void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
                 scc_write(address, value);
                 return;
         }
+        if (IS_SCSI(address)) {
+                if (address & 1) {
+                        if (SCSI_DACK(address))
+                                ncr5380_pseudo_dma_write(value);
+                        else
+                                ncr5380_write_register(SCSI_REG(address), value);
+                }
+                return;
+        }
         if (IS_DUMMY(address))
                 return;
         if (address == PV_SONY_ADDR) {
@@ -471,6 +521,11 @@ void    FAST_FUNC(cpu_write_word)(unsigned int address, unsigned int value)
                 RAM_WR16(CLAMP_RAM_ADDR(address), value);
                 return;
         }
+        if (IS_SCSI(address)) {
+                if (!(address & 1))
+                        cpu_write_byte(address + 1, value & 0xff);
+                return;
+        }
         printf("Ignoring write %04x to address %08x\n", value&0xffff, address);
 }
 
@@ -478,6 +533,13 @@ void    FAST_FUNC(cpu_write_long)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
                 RAM_WR32(CLAMP_RAM_ADDR(address), value);
+                return;
+        }
+        if (IS_SCSI(address)) {
+                if (!(address & 1)) {
+                        cpu_write_word(address, value >> 16);
+                        cpu_write_word(address + 2, value & 0xffff);
+                }
                 return;
         }
         printf("Ignoring write %08x to address %08x\n", value, address);
@@ -496,7 +558,7 @@ static void     update_overlay_layout(void)
 /* Called when the CPU pulses the RESET line */
 void    cpu_pulse_reset(void)
 {
-        /* Reset IRQs etc. */
+        ncr5380_reset();
 }
 
 /* Called when the CPU acknowledges an interrupt */
@@ -567,6 +629,7 @@ int     umac_init(void *ram_base, void *rom_base, disc_descr_t discs[DISC_NUM_DR
         _ram_base = ram_base;
         _rom_base = rom_base;
 
+        ncr5380_reset();
 	m68k_init();
 	m68k_set_cpu_type(M68K_CPU_TYPE_68000);
 	m68k_pulse_reset();
@@ -685,6 +748,7 @@ static void     mouse_tick(void)
 void    umac_reset(void)
 {
         overlay = 1;
+        ncr5380_reset();
         m68k_pulse_reset();
 }
 

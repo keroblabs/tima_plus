@@ -27,6 +27,7 @@
  * SOFTWARE.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -41,6 +42,7 @@
 #include "umac.h"
 #include "machw.h"
 #include "disc.h"
+#include "scsi_disk.h"
 
 #include "keymap_sdl.h"
 
@@ -51,12 +53,34 @@ static void     print_help(char *n)
                "\t-W <rom dump path>\tDump ROM after patching\n"
                "\t-d <disc path>\n"
                "\t-w\t\t\tEnable persistent disc writes (default R/O)\n"
+               "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
+               "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
+               "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
                "\t-i\t\t\tDisassembled instruction trace\n", n);
 }
 
 #define DISP_SCALE      2
+#define UMAC_MOUSE_FREE_TITLE "umac (click to capture mouse)"
 
 static uint32_t framebuffer[DISP_WIDTH*DISP_HEIGHT];
+
+static bool     set_mouse_capture(SDL_Window *window, SDL_bool capture)
+{
+        if (SDL_SetRelativeMouseMode(capture) != 0) {
+                fprintf(stderr, "Cannot %s the mouse: %s\n",
+                        capture ? "capture" : "release", SDL_GetError());
+                return false;
+        }
+        SDL_SetWindowTitle(window, capture ? "umac (F12 releases mouse)" : UMAC_MOUSE_FREE_TITLE);
+        return true;
+}
+
+static bool     same_file(int fd, const char *path)
+{
+        struct stat opened, other;
+        return path && fstat(fd, &opened) == 0 && stat(path, &other) == 0 &&
+               opened.st_dev == other.st_dev && opened.st_ino == other.st_ino;
+}
 
 /* Blit a 1bpp FB to a 32BPP RGBA output.  SDL2 doesn't appear to support
  * bitmap/1bpp textures, so expand.
@@ -100,11 +124,14 @@ int     main(int argc, char *argv[])
         int ch;
         int opt_disassemble = 0;
         int opt_write = 0;
+        const char *scsi_filename = NULL;
+        int scsi_id = -1;
+        bool scsi_write = false;
 
         ////////////////////////////////////////////////////////////////////////
         // Args
 
-        while ((ch = getopt(argc, argv, "r:d:W:ihw")) != -1) {
+        while ((ch = getopt(argc, argv, "r:d:W:s:t:ihwp")) != -1) {
                 switch (ch) {
                 case 'r':
                         rom_filename = strdup(optarg);
@@ -126,12 +153,34 @@ int     main(int argc, char *argv[])
                         rom_dump_filename = strdup(optarg);
                         break;
 
+                case 's':
+                        scsi_filename = optarg;
+                        break;
+
+                case 't':
+                        if (optarg[0] < '0' || optarg[0] > '6' || optarg[1] != '\0') {
+                                fprintf(stderr, "SCSI target ID must be between 0 and 6\n");
+                                return 1;
+                        }
+                        scsi_id = optarg[0] - '0';
+                        break;
+
+                case 'p':
+                        scsi_write = true;
+                        break;
+
                 case 'h':
                 default:
                         print_help(argv[0]);
                         return 1;
                 }
         }
+        if (!scsi_filename && (scsi_id != -1 || scsi_write)) {
+                fprintf(stderr, "-t and -p require a SCSI image (-s)\n");
+                return 1;
+        }
+        if (scsi_id == -1)
+                scsi_id = 1;
 
         ////////////////////////////////////////////////////////////////////////
         // Load memories/discs
@@ -155,16 +204,36 @@ int     main(int argc, char *argv[])
                 printf("Failed to patch ROM\n");
                 return 1;
         }
+
+        struct scsi_image scsi_image;
+        struct scsi_disk scsi_disk;
+        int result = 1;
+        if (scsi_filename) {
+                if (scsi_image_open(&scsi_image, scsi_filename, scsi_write)) {
+                        fprintf(stderr, "SCSI image '%s': %s\n", scsi_filename, strerror(errno));
+                        return 1;
+                }
+                if (same_file(scsi_image.fd, ram_filename) || same_file(scsi_image.fd, rom_filename) ||
+                    same_file(scsi_image.fd, rom_dump_filename) || same_file(scsi_image.fd, disc_filename)) {
+                        fprintf(stderr, "Use a separate file for the SCSI image (not RAM, ROM or floppy)\n");
+                        goto close_scsi;
+                }
+                scsi_disk_init(&scsi_disk, &scsi_image.media);
+                printf("SCSI ID %d: '%s' (%s)\n", scsi_id, scsi_filename,
+                       scsi_write ? "writable" : "read-only");
+        }
+
         if (rom_dump_filename) {
                 int rfd = open(rom_dump_filename, O_CREAT | O_TRUNC | O_RDWR, 0655);
                 if (rfd < 0) {
                         perror("ROM dump");
-                        return 1;
+                        goto close_scsi;
                 }
                 ssize_t written = write(rfd, rom_base, _rom_size);
                 if (written < 0) {
                         perror("ROM dump write");
-                        return 1;
+                        close(rfd);
+                        goto close_scsi;
                 }
                 if (written < _rom_size) {
                         printf("*** WARNING: Short write to %s!\n",
@@ -179,16 +248,16 @@ int     main(int argc, char *argv[])
         ofd = open(ram_filename, O_CREAT | O_TRUNC | O_RDWR, 0644);
         if (ofd < 0) {
                 perror("RAM");
-                return 1;
+                goto close_scsi;
         }
         if (ftruncate(ofd, RAM_SIZE)) {
                 perror("RAM ftruncate");
-                return 1;
+                goto close_scsi;
         }
         ram_base = mmap(0, RAM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ofd, 0);
         if (ram_base == MAP_FAILED) {
                 perror("RAM mmap");
-                return 1;
+                goto close_scsi;
         }
         printf("RAM mapped at %p\n", (void *)ram_base);
 
@@ -200,7 +269,7 @@ int     main(int argc, char *argv[])
                 ofd = open(disc_filename, opt_write ? O_RDWR : O_RDONLY);
                 if (ofd < 0) {
                         perror("Disc");
-                        return 1;
+                        goto close_scsi;
                 }
 
                 fstat(ofd, &sb);
@@ -217,7 +286,7 @@ int     main(int argc, char *argv[])
                                  ofd, 0);
                 if (disc_base == MAP_FAILED) {
                         printf("Can't mmap disc!\n");
-                        return 1;
+                        goto close_scsi;
                 }
                 printf("Disc mapped at %p, size %ld\n", (void *)disc_base, disc_size);
 
@@ -233,7 +302,7 @@ int     main(int argc, char *argv[])
         SDL_Texture *texture;
 
         SDL_Init(SDL_INIT_VIDEO);
-        SDL_Window *window = SDL_CreateWindow("umac",
+        SDL_Window *window = SDL_CreateWindow(UMAC_MOUSE_FREE_TITLE,
                                               SDL_WINDOWPOS_UNDEFINED,
                                               SDL_WINDOWPOS_UNDEFINED,
                                               DISP_WIDTH * DISP_SCALE,
@@ -241,17 +310,14 @@ int     main(int argc, char *argv[])
                                               0);
         if (!window) {
                 perror("SDL window");
-                return 1;
+                goto close_scsi;
         }
-        SDL_SetWindowGrab(window, SDL_TRUE);
-        SDL_SetRelativeMouseMode(SDL_TRUE);
-
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
         if (!renderer) {
                 perror("SDL renderer");
-                return 1;
+                goto close_scsi;
         }
 
         texture = SDL_CreateTexture(renderer,
@@ -261,7 +327,7 @@ int     main(int argc, char *argv[])
                                     DISP_HEIGHT);
         if (!texture) {
                 perror("SDL texture");
-                return 1;
+                goto close_scsi;
         }
 
         ////////////////////////////////////////////////////////////////////////
@@ -269,6 +335,13 @@ int     main(int argc, char *argv[])
 
         umac_init(ram_base, rom_base, discs);
         umac_opt_disassemble(opt_disassemble);
+        if (scsi_filename) {
+                struct scsi_target target = scsi_disk_target(&scsi_disk, scsi_id);
+                if (!ncr5380_attach(&target)) {
+                        fprintf(stderr, "Cannot attach SCSI target %d: invalid descriptor\n", scsi_id);
+                        goto close_scsi;
+                }
+        }
 
         ////////////////////////////////////////////////////////////////////////
         // Main loop
@@ -289,8 +362,22 @@ int     main(int argc, char *argv[])
                                 done = 1;
                                 break;
 
+                        case SDL_WINDOWEVENT:
+                                if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                                        set_mouse_capture(window, SDL_FALSE);
+                                        mouse_button = 0;
+                                }
+                                break;
+
                         case SDL_KEYDOWN:
                         case SDL_KEYUP: {
+                                if (event.key.keysym.scancode == SDL_SCANCODE_F12) {
+                                        if (event.type == SDL_KEYDOWN) {
+                                                set_mouse_capture(window, SDL_FALSE);
+                                                mouse_button = 0;
+                                        }
+                                        break;
+                                }
                                 int c = SDLScan2MacKeyCode(event.key.keysym.scancode);
                                 c = (c << 1) | 1;
                                 printf("Key 0x%x -> 0x%x\n", event.key.keysym.scancode, c);
@@ -304,6 +391,9 @@ int     main(int argc, char *argv[])
                                 break;
 
                         case SDL_MOUSEBUTTONDOWN:
+                                if (event.button.button == SDL_BUTTON_LEFT &&
+                                    !SDL_GetRelativeMouseMode() && set_mouse_capture(window, SDL_TRUE))
+                                        break;
                                 mouse_button = 1;
                                 break;
 
@@ -339,5 +429,15 @@ int     main(int argc, char *argv[])
                 }
         } while (!done);
 
-        return 0;
+        SDL_Quit();
+        result = 0;
+close_scsi:
+        if (scsi_filename) {
+                ncr5380_attach(NULL);
+                if (scsi_image_close(&scsi_image)) {
+                        perror("Closing SCSI image");
+                        result = 1;
+                }
+        }
+        return result;
 }
