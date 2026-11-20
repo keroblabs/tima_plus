@@ -1,14 +1,14 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `REVIEW`
+**Status:** `IN_PROGRESS`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
 
-uMac currently boots floppy media through a patched Macintosh Plus ROM and a host-side paravirtual `.Sony` replacement. Its IWM memory-mapped registers are mostly placeholders, so the **unmodified** ROM's actual `.Sony` driver cannot yet read a normal 800K floppy image through authentic IWM operations.
+Before this task, uMac booted floppy media through a patched Macintosh Plus ROM and a host-side paravirtual `.Sony` replacement. The placeholder IWM registers could not serve the original ROM's `.Sony` driver.
 
-This first implementation phase establishes the **IWM register/timing behaviour** plus an independent **virtual disk/drive model**, fed by a logical `.dsk` image and a circular encoded track bitstream. It is deliberately **read-only**; the write data path is **stubbed**, without modifying either the buffer or the disk image. Successful original-ROM boot is the release gate.
+This phase implements IWM register timing and an independent virtual drive with a circular bitstream encoded from raw or DiskCopy 4.2 Macintosh 800K images. The drive is read-only and the write path is stubbed. Successful original-ROM boot is the release gate.
 
 **Details**
 
@@ -17,7 +17,7 @@ This first implementation phase establishes the **IWM register/timing behaviour*
 - Primary milestone: [PLUS-DEV-0003](../../01-development-roadmap.md#plus-dev-0003--run-the-unmodified-macintosh-plus-rom); read-only prerequisite for [PLUS-DEV-0004](../../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem).
 - Architecture: [04-iwm-emulation.md](../../04-iwm-emulation.md), especially §§1–2, 4–6 and 8.
 - Dependent follow-on: [PLUS-EMU-0010](PLUS-EMU-0010.md) implements writing and persistence; **not part of this ticket**.
-- The IWM owns the soft switches, mode and read latch. The disk module owns the Sony drive, raw image loader and track encoder. [iwm.c](../../../devel/umac/src/iwm.c), [iwm.h](../../../devel/umac/include/iwm.h), [disk_img.c](../../../devel/umac/src/disk_img.c), [disk_img.h](../../../devel/umac/include/disk_img.h)
+- The IWM owns the soft switches, mode and read latch. The disk module owns the Sony drive, image loader and track encoder. [iwm.c](../../../devel/umac/src/iwm.c), [iwm.h](../../../devel/umac/include/iwm.h), [disk_img.c](../../../devel/umac/src/disk_img.c), [disk_img.h](../../../devel/umac/include/disk_img.h)
 - The CPU bus integration accounts for peripheral access phases and connects VIA PA5 and the timers to the C8M timeline. [main.c](../../../devel/umac/src/main.c), [via.c](../../../devel/umac/src/via.c)
 - At baseline `9c97aeb`, `main.c` had placeholder registers and the SDL frontend patched the Plus V3 ROM with a host-side floppy driver. The implementation uses the original ROM and omits the legacy `disc.c` from both builds.
 - Primary reference: [original Macintosh Plus ROM `.Sony` disassembly](https://github.com/jonathanschilling/mac_rom/blob/main/plus/resources/res_drvr_sony.s); Apple IWM/SWIM specifications for mode, latch and soft-switch semantics; [MAME IWM](https://github.com/mamedev/mame/blob/master/src/devices/machine/iwm.cpp) for comparison only.
@@ -32,11 +32,11 @@ This first implementation phase establishes the **IWM register/timing behaviour*
 
 ### Component B — read-only virtual disk/drive
 
-- Open a valid `819200`-byte logical 800K `.dsk` and reject unsupported sizes/formats clearly; preserve byte-for-byte image contents throughout this ticket.
+- Open raw 819,200-byte 800K images and Macintosh 800K DiskCopy 4.2 images with valid headers and checksums. Preserve every source byte and reject unsupported or malformed images with a diagnostic.
 - For the selected (track, side), load its 512-byte sectors using zone geometry 12/11/10/9/8 sectors over five 16-track bands, and the correct logical/physical sector ordering.
-- Implement the Macintosh 6-and-2 packing and GCR mapping, data/address fields, tags/checksums, prologues, epilogues, synchronization and gaps. Match expected ROM sector format; do not assume eight-bit alignment in ten-bit sync.
+- Place the stored 12-byte tag ahead of its sector data in the encoded field. Use zero-filled tags for raw or tagless media. Encode both with Macintosh 6-and-2 packing, GCR codewords and the sector checksum, with address fields, prologues, epilogues, sync and gaps.
 - Build a **circular bitstream** with a well-defined bit length/rotation position. Read from it according to elapsed virtual IWM ticks, not on demand from a requested sector number or from `PV_SONY_ADDR`. Rebuild/select buffers when stepping tracks or changing side; optionally cache more than one track/side.
-- No mutations, dirty flags requiring persistence or writes to `.dsk` during this phase. Expose a stable disk/timing API that Phase 2 can extend without breaking IWM reads.
+- Open the backing image read-only and keep an immutable in-memory snapshot behind the disk and timing API.
 
 ### Unmodified-ROM requirement
 
@@ -51,10 +51,10 @@ This first implementation phase establishes the **IWM register/timing behaviour*
 |---|---|---|
 | `EMU3-A1` | Original ROM and IWM initialization | Unmodified ROM hash/bytes recorded; no `rom_patch()` in authentic mode; mode and soft-switch traces match actual `.Sony` accesses |
 | `EMU3-A2` | Deterministic read-only unit tests | IWM Q6/Q7, SENSE, mode `$1F`, latch clear/rearm, missed codeword, reset, track/side selection and 16-tick bit-cell progression |
-| `EMU3-A3` | Disk encoder and circular stream | Known logical sectors produce correct address/data GCR records, checksums and ten-bit sync; track zones, circular wrap and bit positions tested |
-| `EMU3-A4` | Read-only medium protection | Guest sees write-protected disk; no code path mutates buffer/media file; `.dsk` hash unchanged after run and rejected/stubbed writes |
-| `EMU3-A5` | **System Software boot** | Unmodified ROM, original `.Sony` driver and known-good 800K image read sectors across sides/zones and boot original System Software; record command, media hash, ROM identity and observed result |
-| `EMU3-A6` | Regression | Existing explicit patched mode (if retained), SCSI, RTC/PRAM and representative emulator tests pass or have documented, approved exceptions |
+| `EMU3-A3` | Disk encoder and circular stream | Decode both image formats and compare sector data, tags, address fields and checksums. Test ten-bit sync, track zones, circular wrap and bit positions. |
+| `EMU3-A4` | Read-only medium protection | The ROM sees write protection and returns `wPrErr`. Compare track and image bytes after a rejected write. |
+| `EMU3-A5` | **System Software boot** | Boot raw and tagged 800K media with the identified original ROM. Compare original `.Sony` data and tag reads across sides and zones. |
+| `EMU3-A6` | Regression | Check desktop boot performance, guest input and clock rates, SCSI, RTC/PRAM, and display and input behavior. |
 
 **Phase 1 exclusion:** write serialization, write handshake/underrun correctness, dirty-track flushing, formatting and persistent mutations belong to `PLUS-EMU-0010`. A synthetic-controller test alone or a patched-ROM boot does not close `PLUS-EMU-0003`.
 
@@ -76,7 +76,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 
 ### Desktop startup performance
 
-The SDL loop added in `427e0d2` converts virtual C8M ticks into a host deadline and calls `SDL_Delay` after each approximately 5 ms slice. This caps desktop execution at one emulated second per wall-clock second on a sufficiently fast host. Baseline `9c97aeb` ran CPU slices as fast as the host could execute them and presented frames on host time. The current loop also presents one frame per guest VBL, so bypassing the sleep alone still presents every emulated frame during a fast boot. [SDL loop](../../../devel/umac/src/unix_main.c), [C8M run loop](../../../devel/umac/src/main.c)
+The SDL loop added in `427e0d2` converted virtual C8M ticks into a host deadline and called `SDL_Delay` after each approximately 5 ms slice. This capped desktop execution at one emulated second per wall-clock second. Baseline `9c97aeb` ran CPU slices as fast as the host could execute them and presented frames on host time. The paced loop also presented one frame per guest VBL, so bypassing its sleep alone still presented every emulated frame during a fast boot. [SDL loop](../../../devel/umac/src/unix_main.c), [C8M run loop](../../../devel/umac/src/main.c)
 
 All comparisons used a 4 MiB Debug build, fresh PRAM, SDL's dummy video driver with the software renderer, and tracing disabled. The SCSI case used the ROM and `HD10_512.hda` from the VS Code launch configuration, with an empty floppy drive. The floppy case used the 819,200-byte data portion of `plus-system.dsk`, verified against its Disk Copy checksum `6c542b16`. Its raw SHA-256 was `89c76e5f6b4fd24560933b0d85b0fa99aa70f11c1a92c3e8b4c1771ad5db6435`. The ROM and both media inputs retained their hashes.
 
@@ -85,13 +85,32 @@ Launch with `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software` from a fresh work
 | Frontend configuration | SCSI only | 800K floppy |
 | --- | ---: | ---: |
 | Baseline `9c97aeb`, ROM patched at load | 0.561 s | 0.350 s |
-| Current Debug, unmodified ROM and stock SDL loop | 43.505 s | 36.200 s |
-| Current Debug core and ROM, host sleep bypassed in temporary SDL build | 3.521 s | 2.959 s |
-| Current Debug core and ROM, host sleep bypassed and presentation capped at about 60 frames per host second in temporary SDL build | 0.599 s | 0.458 s |
+| `427e0d2`, unmodified ROM and paced SDL loop | 43.505 s | 36.200 s |
+| Unmodified ROM, host sleep bypassed in temporary SDL build | 3.521 s | 2.959 s |
+| Unmodified ROM, host sleep bypassed and presentation capped at about 60 FPS in temporary SDL build | 0.599 s | 0.458 s |
+| Corrected SDL frontend, unmodified ROM | 0.728 s | 0.578 s |
 
 - Instrumenting the paced frontend measured 38.527 s in `SDL_Delay` on the SCSI boot and 32.239 s on the floppy boot, about 89% of elapsed time in each case. The ROM completed RAM initialization at 30.432 virtual seconds in both cases. A ROM PC sample during that interval showed repeated execution of the memory-test loops around `$400E82` and `$400E96`.
 - The A/B builds used the same CPU, VIA and IWM core. Every variant reached the first Finder marker at the same virtual timestamp for its medium, 43.502 s for SCSI and 36.198 s for floppy. With the sleep bypassed, drawing consumed 2.973 s for 2,616 SCSI boot frames and 2.519 s for 2,176 floppy boot frames. Limiting host presentation reduced the frame counts to 36 and 27 while still delivering guest VBL events.
 - The release headless ROM test with the same extracted floppy completed in 0.512 s wall time. It booted to Finder, matched all eleven sector probes, rejected the write, and rebooted after recalibrating from cylinder 79. Waypipe presentation and interactive latency were **NOT TESTED** in this investigation.
+
+### Correction verification
+
+- The corrected 4 MiB Debug frontend booted the original `plus-system.image` in 0.575 s offscreen. As in the table, this measures from launch to the first Finder marker. A separate run measured 59.93 SDL presentations per second, 60.0 Hz guest `TickCount`, and two seconds of guest `Time` over 2.10 wall seconds. The desktop uses wall time for CA2/VBL and CA1/RTC. IWM and VIA timers continue to use virtual C8M.
+- With Wayland and the system SDL library from the VS Code launch setup, the 4 MiB Debug frontend reached Finder in 1.035 s from `HD10_512.hda` and 1.061 s from `plus-system.image`. The floppy run measured 59.73 presentations per second, 60.5 Hz guest `TickCount` and two seconds of guest `Time` over 2.10 wall seconds. The integration tests checked guest input and framebuffer state. Manual Wayland gestures were **NOT TESTED**.
+- The generated `iwm_diskcopy_image` fixture decodes all 1,600 data sectors and tags, checks both checksum conventions for the tag area and covers tagless DiskCopy. It rejects invalid header fields, inconsistent lengths and corrupted sector or tag data. Block zero has nonzero tags and is explicitly covered. The CLI rejected a checksum-corrupted copy before creating RAM or PRAM output.
+- The original `.Sony` driver matched eleven 512-byte sectors and their 12-byte tags via its tag-buffer control call, reported `wPrErr` for a write, and rebooted from cylinder 79. The test passed with the reported DiskCopy image, Apple's original tagged System 6.0.8 System Tools image, and the raw extraction of Apple's image. The ROM and floppy files matched their input bytes after testing.
+- The reported 838,484-byte `devel/umac/plus-system.image` has SHA-256 `11eef5df148b45c0e8e8a7cb1290a1c552e298f497ab7a15d92770479d77aca6`, data checksum `6c542b16` and tag checksum `ae2402e6`. Apple's tagged image has SHA-256 `c4abf2faa74fd789a081452e6df7fbe5afc73aa5ed432f60741688d95620dc02`, data checksum `4027c0be` and tag checksum `227a5720`. In both files the recorded tag checksum starts with the second tag. The drive retains the first tag and also accepts the full tag-area checksum described by Apple. [Apple DiskCopy 4.2 format](https://nulib.com/library/FTN.e00005.htm)
+
+To repeat the corrected 4 MiB Release suite with the reported image, supply the ROM and disk to CMake. The desktop test also needs Python 3.
+
+```sh
+cmake -S devel/umac -B /tmp/tima-plus-iwm -DCMAKE_BUILD_TYPE=Release -DMEMSIZE=4096 \
+  -DUMAC_TEST_PLUS_ROM="$PWD/devel/umac/rom.bin" \
+  -DUMAC_TEST_PLUS_FLOPPY="$PWD/devel/umac/plus-system.image"
+cmake --build /tmp/tima-plus-iwm --parallel 4
+ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
+```
 
 ### Review Findings
 
@@ -100,7 +119,8 @@ Launch with `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software` from a fresh work
 | `EMU3-R1` | `CORRECTION_REQUIRED` | After an explicit reset, the ROM at `$4007D8` waited for system ticks. Musashi cleared its IRQ input while VIA held a pre-reset interrupt. | Reset VIA registers and IRQ state on the current C8M timeline. Boot the original ROM from cylinder 79 and verify it returns to Finder. | `VERIFIED` |
 | `EMU3-R2` | `FUTURE_SCOPE` | Bus phase, spindle spin-up, cylinder settling and TACH use deterministic software timing. Physical measurements were **NOT TESTED**. | Validate electrical timing and mechanics as part of [PLUS-DEV-0008](../../01-development-roadmap.md#plus-dev-0008--validate-the-physical-floppy-replacement). The software boot gate is covered by `EMU3-A5`. | `DEFERRED` |
 | `EMU3-R3` | `CORRECTION_REQUIRED` | UBSan stopped the original System Software boot in Musashi's 32-bit `BCLR` when a signed mask shifted into bit 31. | Use unsigned masks for the 32-bit register bit operations. Repeat the boot and regression suite under ASan and UBSan. | `VERIFIED` |
-| `EMU3-R4` | `CORRECTION_REQUIRED` | The new SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Agree on the desktop speed policy. Measure comparable startup throughput with the same media, confirm presentation cadence, and verify original-ROM IWM boot and the SCSI, RTC/PRAM and input regressions. | `OPEN` |
+| `EMU3-R4` | `CORRECTION_REQUIRED` | The SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Verify comparable startup throughput, host presentation and guest clock rates, original-ROM IWM boot, SCSI, RTC/PRAM and input. | `VERIFIED` |
+| `EMU3-R5` | `CORRECTION_REQUIRED` | The SDL loader rejected `devel/umac/plus-system.image` because the disk backend required exactly 819,200 bytes. The reported 838,484-byte file has a DiskCopy 4.2 header, 1,600 data sectors and 1,600 sector tags. | Load the image directly, preserve all tags through GCR encoding, reject malformed containers, and test raw and tagged original-ROM boot and media protection. | `VERIFIED` |
 
 **Notes**
 
@@ -117,12 +137,20 @@ Launch with `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software` from a fresh work
 - **2026-11-19 — Verification and Status Change:** The SDL loader rejected a 1.44 MB floppy and a corrupted V3 ROM before creating RAM or PRAM output. The implementation and tests are in local commit `427e0d2`. All six acceptance checks have developer evidence. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 - **2026-11-20 — Performance investigation and review:** Reproduced the owner-reported slowness with the current SCSI-only launch inputs and an 800K floppy. The controlled frontend comparison attributes the slowdown to host pacing and confirms the additional cost of drawing every guest frame during accelerated boot. Added `EMU3-R4` and marked `427e0d2` `CHANGES_REQUESTED`. The ticket stays in `REVIEW` pending agreement on the desktop speed policy. Diagnostic changes were confined to temporary builds.
 - **2026-11-20 — Regression retest:** All ten existing CTest cases passed in the Release build, including the original-ROM floppy boot and SCSI Manager checks.
+- **2026-11-20 — Discovery:** Reproduced the reported DiskCopy mount failure with `-d devel/umac/plus-system.image` and the Plus V3 ROM. The file has valid 800K size fields and a matching data checksum. Its tag checksum matches after omitting the first 12-byte tag. Added `EMU3-R5`.
+- **2026-11-20 — Decision and Status Change:** The project owner requested fixes for both open findings and a tagged-image regression test. Expanded the read-only media scope to Macintosh 800K DiskCopy 4.2 images. Started both corrections on `plus-emu-0003-iwm` and moved `REVIEW` → `IN_PROGRESS`.
+- **2026-11-20 — Regression reproduction:** The generated tagged fixture failed to open when linked against the previous disk backend. The SDL boot regression timed out at 15 s on the paced frontend with the original V3 ROM and raw floppy.
+- **2026-11-20 — Rework:** Removed CPU sleeps and scheduled rendering on its own host deadline. The initial uncapped build retained guest-clock VBL and drove `TickCount` at 6,856 Hz in a desktop test. Restored the pre-IWM wall-time VBL policy to preserve the original ROM's key-repeat and double-click intervals. VIA timer and floppy bit timing remain on C8M. Scheduled the RTC interrupt on wall time because the ROM adds one second for each CA1 interrupt. Added the read-only DiskCopy parser and threaded sector tags through the running GCR payload checksum.
+- **2026-11-20 — ROM test correction:** The official tagged System Tools image reached Finder, then the probe hit System Error `$1C` after borrowing 1 KiB below the live stack pointer. The integration test now keeps the live stack and allocates its probe buffers through the guest Memory Manager. The tagged image then passed all sector, tag, protection and reset checks.
+- **2026-11-20 — Verification:** Passed 12/12 CTests in 4 MiB Release with the reported tagged image, 11/11 in 1 MiB Release with raw System Tools, and 9/9 in Debug without external assets. Passed 12/12 in 4 MiB Debug under ASan and UBSan with leak detection disabled in the sandbox. All four HFS converter tests and the standalone Make build passed. Confirmed offscreen and Wayland startup and guest timing. The ROM and media hashes matched before and after the runs. Marked `EMU3-R4` and `EMU3-R5` `VERIFIED`.
 
 **Proposed Change**
 
-Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. Load the original ROM and synthesize circular GCR tracks from read-only raw 800K sectors. Retain the write stub for Phase 1 and review the implementation and verification against the acceptance matrix.
+Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. Load the original ROM and synthesize circular GCR tracks from read-only 800K media. Retain the Phase 1 write stub.
 
-For `EMU3-R4`, restore fast desktop execution or expose a choice of host pacing. Schedule host presentation independently of guest VBL. Derive guest VBL, VIA and IWM timing from C8M in each host speed mode.
+For `EMU3-R4`, restore uncapped CPU execution in SDL. Use independent host deadlines for presentation at up to 60 FPS, guest VBL at about 60 Hz and the VIA one-second notification. Keep IWM and VIA timer timing on the virtual C8M clock. Verify fast startup alongside near-real-time guest `TickCount` and `Time`.
+
+For `EMU3-R5`, validate Macintosh 800K DiskCopy 4.2 headers, lengths and checksums before attaching the disk. Encode each stored 12-byte tag ahead of its corresponding 512-byte sector. Use zero-filled tags for raw and tagless images. [Apple DiskCopy 4.2 format](https://nulib.com/library/FTN.e00005.htm)
 
 **Commits**
 

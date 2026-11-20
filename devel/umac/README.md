@@ -10,7 +10,7 @@ An embedding application owns the RAM, original ROM and internal drive.
 Create the drive with `disk_img_open(path)` or pass a null path for an empty
 installed drive. Each `umac_loop()` advances about 5 ms of emulated time.
 Use `umac_ticks()` for the virtual C8M clock, `MAC_FRAME_TICKS` for vertical
-blanking, and `MAC_C8M_HZ` for the one-second VIA event.
+blanking, and the RTC's time source to schedule the one-second VIA event.
 
 ```c
 umac_init(ram, rom, internal_floppy);
@@ -33,9 +33,11 @@ The desktop build uses the sibling [Musashi checkout](../Musashi) at
 `../Musashi` instead of the original `external/Musashi` submodule.
 
 Supply a 128 KiB unmodified Macintosh Plus V3 ROM with checksum `4d1f8172`.
-For floppy boot, supply a bootable raw Macintosh 800K image containing exactly
-819,200 bytes of logical sectors. Extract the data portion of a Disk Copy
-container before mounting it. System 6.0.8 System Tools is a verified boot image.
+For floppy boot, attach a bootable raw Macintosh 800K image (819,200 bytes)
+or a Macintosh 800K DiskCopy 4.2 image (838,484 bytes with sector tags).
+DiskCopy images are validated and their 12-byte sector tags are preserved.
+Raw images and tagless DiskCopy images use zero-filled tags. System 6.0.8
+System Tools is a verified boot image.
 
 # Build
 
@@ -94,10 +96,15 @@ execution.  (See _RISC_.)
 From the `umac` directory, run the CMake-built executable:
 
 ```
-./build-cmake/umac -r rom.bin -d System608.dsk
+./build-cmake/umac -r rom.bin -d System608.image
 ```
 
 If you built with the Makefile, use `./main` instead.
+
+The SDL frontend runs the CPU as fast as the host allows. Floppy and VIA
+timer operations use the emulated C8M clock. Screen presentation, guest
+vertical blanking and the guest one-second clock interrupt use wall time
+to keep the display and input timing usable at desktop speeds.
 
 The host pointer is free at startup. Left-click the emulator window to
 capture it; that click is not sent to the Mac if capture succeeds.
@@ -117,24 +124,27 @@ former `-w` floppy-write option is rejected.
 
 ### Floppy tests
 
-The `iwm_controller`, `iwm_disk_image`, and `iwm_media_protection` CTest cases
-use generated inputs. They cover the controller and drive signals, serial
-read clock, write stub, encoded sectors, and frontend media protection.
+The `iwm_controller`, `iwm_disk_image`, `iwm_diskcopy_image` and
+`iwm_media_protection` CTest cases use generated inputs. They cover drive
+signals, serial timing, encoded sectors and tags, container validation, and
+media protection.
 
-To add a test that boots original System Software, configure with your
-unmodified Mac Plus V3 ROM and a bootable raw 800K System Tools floppy.
+To test original System Software boot, configure with your unmodified
+Mac Plus V3 ROM and a bootable raw or DiskCopy 4.2 800K floppy.
 
 ```sh
 cmake -S . -B build-cmake \
   -DUMAC_TEST_PLUS_ROM=/path/to/rom.bin \
-  -DUMAC_TEST_PLUS_FLOPPY=/path/to/System608.dsk
+  -DUMAC_TEST_PLUS_FLOPPY=/path/to/System608.image
 cmake --build build-cmake --parallel
 ctest --test-dir build-cmake --output-on-failure
 ```
 
 The ROM test checks Finder, display and keyboard/mouse input. The original
-`.Sony` driver reads sectors on both heads and in all five speed zones, reports
-a write-protection error, and recalibrates during a reboot from cylinder 79.
+`.Sony` driver reads sectors and tags on both heads and in all five speed
+zones, reports a write-protection error, and recalibrates during a reboot from
+cylinder 79. With 4 MiB of guest RAM and Python 3, the SDL boot test also checks
+startup time and the guest clock and VBL rates.
 To collect the MMIO trace, run `build-cmake/umac_iwm_rom_test ROM FLOPPY --trace`.
 
 ## SCSI hard disks

@@ -13,7 +13,7 @@
 This document records the IWM discussions of 18–19 November 2026 and the subsequently approved **two-component, two-phase virtual floppy** plan. It supersedes earlier sequencing assumptions requiring STM32F411/Unicorn or a physical drive emulator before original-ROM virtual-floppy boot. The companion roadmap documents have not yet been reconciled with this updated sequencing.
 
 1. **Two software components:** a register/timing-oriented **IWM behaviour model** (`iwm.c/.h`) and an independent **virtual disk/drive model** (`disk_img.c/.h`).
-2. **Phase 1 — `PLUS-EMU-0003`: read-only.** Disable ROM patching in the authentic execution path, execute the unmodified Macintosh Plus ROM and its own `.Sony` driver; implement the software-visible IWM read/control behaviour, drive control/sense, and a circular encoded track buffer populated from a standard 800K logical `.dsk` using 6-and-2 packing and GCR codeword mapping. **Stub the IWM/disk write path:** no track modification, no persistence and no claim of write support. Present the mounted medium as write-protected during this phase.
+2. **Phase 1 — `PLUS-EMU-0003`: read-only.** Execute the unmodified Macintosh Plus ROM and its own `.Sony` driver. Implement IWM read/control behaviour, drive control and sense, and a circular track buffer populated from a raw or DiskCopy 4.2 Macintosh 800K image using 6-and-2 packing and GCR codewords. Stub writes and present the mounted medium as write-protected.
 3. **Phase 2 — `PLUS-EMU-0010`: write-capable.** Implement real IWM write-handshake/buffering and overwrite the circular track stream at its current bit position. Mark changed tracks dirty. On stepping to a different track or changing head/side, decode and validate changes, reverse GCR and 6-and-2, and store modified logical sectors back into the `.dsk`. Also flush safely on eject, medium replacement and orderly shutdown; avoid writes when the track is clean.
 4. **The IWM is an independent time-driven register device.** It owns Q6/Q7, mode, latch/rearm, register reads/writes and any hardware-equivalent handshakes; it does not decode disk sectors or access `.dsk` files.
 5. **The disk is a bitstream-backed virtual device.** It owns tracks/sides, addressable drive control/sense, an encoded circular bitstream with explicit bit length/phase, and logical-sector image translation. It does not interpret MC68000 memory addresses or implement ROM shortcuts.
@@ -49,7 +49,7 @@ Preserve the existing paravirtual `.Sony` implementation only as an **explicitly
            | 6-and-2 + GCR mapping      |
            +-------------+--------------+
                          |
-               800K logical .dsk
+               raw or DiskCopy 4.2 800K image
              (512-byte sector payloads)
                Phase 1: read-only
                Phase 2: dirty-track flush
@@ -221,14 +221,17 @@ A circular encoded track has an independent angular/bit position. Between access
 
 ## 6. Virtual 800K media and circular track buffer
 
-### 6.1 Phase 1: logical .dsk to timed encoded track
+### 6.1 Phase 1: 800K image to timed encoded track
 
-Input is a standard **819,200-byte logical 800K `.dsk`**: 80 cylinder tracks, two sides, with 12/11/10/9/8 sectors per track in five 16-track zones. It contains 512-byte logical sectors, **not** a recording of their on-disk self-sync, prologues, checksums or timing.
+Both image formats contain 1,600 logical 512-byte sectors. The virtual drive has 80 cylinders with 12/11/10/9/8 sectors per side in five 16-cylinder zones.
+
+- A raw image stores 819,200 sector-data bytes. The encoder supplies a zero-filled 12-byte tag for each sector.
+- A Macintosh 800K DiskCopy 4.2 image has an 84-byte header, the same sector data, and an optional 19,200-byte tag area. A tagged image totals 838,484 bytes. `disk_img.c` validates the header, lengths and checksums before mounting. It preserves all stored tags, including the first tag in an image whose tag checksum starts at the second one. Tagless images use zero-filled tags. [Apple DiskCopy 4.2 format](https://nulib.com/library/FTN.e00005.htm)
 
 For the selected track **and side**, the disk component:
 
-1. Reads the corresponding 512-byte logical sectors from the image (honouring the correct zone and sector ordering).
-2. Applies Macintosh Sony 6-and-2 packing and maps six-bit symbols to legal GCR codewords, producing the required sector data and tag representation; computes the correct checksums.
+1. Reads the corresponding logical sectors and tags in the image's zone and sector order.
+2. Encodes the 12 tag bytes followed by the 512 sector bytes with Sony 6-and-2 packing and GCR codewords. The data-field checksum covers both.
 3. Constructs the proper address fields, sector-data fields, prologues/epilogues, **self-synchronization**, gaps and interleave. Self-sync includes bit lengths not necessarily divisible by eight; do not substitute a plain byte array without retaining valid bit count and phase.
 4. Packs the resulting stream into an allocated **circular bit buffer** with explicit valid-bit length, track/side identity and continuously advancing rotational position.
 5. Supplies bits at a nominal one bit cell per **16 elapsed C8M ticks** regardless of MC68000 polls; when read mode is active, the IWM assembles/latches codewords according to the original hardware/ROM contract.
@@ -236,7 +239,7 @@ For the selected track **and side**, the disk component:
 
 An implementation may cache multiple (track, side) buffers, but **must not** require a whole-disk encoded cache. Rebuilding on track change is acceptable so long as time advancement, side selection and the original ROM's expected drive status remain coherent. No host filesystem-level sector shortcut may satisfy authentic-ROM IWM reads.
 
-The `.Sony` driver runs within the unmodified ROM and performs its original on-the-fly GCR decoding. The host-side disk emulator **encodes data for reading** because a logical `.dsk` does not already contain these encoded fields.
+The host disk component synthesizes the encoded fields from the image. The `.Sony` driver in the unmodified ROM performs its original on-the-fly GCR decoding.
 
 ### 6.2 Phase 2: serial writes to circular bit positions
 
@@ -272,7 +275,7 @@ Both tickets are formally opened under `docs/tasks/db/`. **Phase 2 depends on Ph
 
 | Phase / ticket | Scope | Required acceptance evidence |
 |---|---|---|
-| **Phase 1 — [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md)** | Disable ROM patching for authentic mode; implement IWM soft switches, mode `$1F`, status, read latch/rearm, elapsed-clock progression; supply drive control/sense from a circular encoded track built from logical `.dsk`. **Write stub only**, medium reported write-protected. | Original **unmodified ROM** and original `.Sony` driver start, recognize the image, read across zones/sides and boot known-good 800K System Software. Read-only tests, byte/bit sync tests, reset/timing traces. The loaded ROM image is verified unchanged; no `PV_SONY_ADDR` calls in authentic mode. |
+| **Phase 1 — [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md)** | Use the original ROM, implement IWM soft switches, mode `$1F`, status, latch/rearm and elapsed-clock progression. Provide drive control, sense and circular tracks from raw or DiskCopy 4.2 Macintosh 800K images. Stub writes and report write protection. | Original ROM and `.Sony` driver boot 800K System Software and match sector and tag contents across sides and zones. Test media protection, byte and bit sync, reset, and timing traces. |
 | **Phase 2 — [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md)** | Replace write stub with IWM write buffer/handshake/underrun and bit-positioned circular writes; dirty-track flags; decode/checksum and persist changed logical sectors on step/side change and safe lifecycle events. | Original `.Sony` writes, read-after-write, dirty/clean flush, persistence after image reopen, failed-save recovery and standard formatting as specified. No sector-level bypass. |
 | **Later — PLUS-EMU-0007** | Actual STM32 production firmware under Unicorn, separate media endpoint | Repeat ROM read/write/boot tests through firmware and production-compatible raw flash image. |
 | **Later — physical drive prototype** | Macintosh IWM pin-level compatibility with whichever hardware architecture is selected | Real-Mac measurement and electrical compatibility; emulator-only evidence is insufficient. |

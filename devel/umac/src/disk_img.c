@@ -9,6 +9,9 @@
 
 enum {
         CYLINDERS = 80, SECTOR_SIZE = 512, TAG_SIZE = 12,
+        DC42_HEADER_SIZE = 84,
+        DC42_DATA_END = DC42_HEADER_SIZE + DISK_IMG_SIZE,
+        DC42_TAG_BYTES = DISK_IMG_SIZE / SECTOR_SIZE * TAG_SIZE,
         SPIN_UP_TICKS = MAC_C8M_HZ * 120 / 1000,
         STEP_TICKS = MAC_C8M_HZ * 3 / 1000,
         BITS_PER_MINUTE = MAC_C8M_HZ / DISK_IMG_BIT_TICKS * 60,
@@ -37,6 +40,8 @@ struct track {
 
 struct disk_img {
         const uint8_t *image;
+        const uint8_t *data;
+        const uint8_t *tags;
         bool inserted;
         struct track tracks[2];
         struct disk_img_status status;
@@ -90,7 +95,7 @@ static void append_group(struct track *track, const uint8_t group[3], unsigned i
                 append_byte(track, gcr[group[i] & 0x3f]);
 }
 
-static void append_payload(struct track *track, const uint8_t *sector)
+static void append_payload(struct track *track, const uint8_t *tag, const uint8_t *sector)
 {
         uint8_t checksum[3] = {0};
         for (unsigned int offset = 0; offset < TAG_SIZE + SECTOR_SIZE;) {
@@ -99,7 +104,7 @@ static void append_payload(struct track *track, const uint8_t *sector)
                 checksum[2] = (checksum[2] << 1) | carry;
                 unsigned int i = 0;
                 while (i < 3 && offset < TAG_SIZE + SECTOR_SIZE) {
-                        uint8_t byte = offset < TAG_SIZE ? 0 : sector[offset - TAG_SIZE];
+                        uint8_t byte = offset < TAG_SIZE ? tag[offset] : sector[offset - TAG_SIZE];
                         encoded[i] = byte ^ checksum[(i + 2) % 3];
                         unsigned int sum = checksum[i] + byte + carry;
                         checksum[i++] = sum;
@@ -127,7 +132,7 @@ static void append_trailer(struct track *track)
 }
 
 static void append_sector(struct track *track, unsigned int side, unsigned int sector,
-                          const uint8_t *data)
+                          const uint8_t *tag, const uint8_t *data)
 {
         unsigned int cylinder_lo = track->cylinder & 0x3f;
         unsigned int cylinder_hi_side = (track->cylinder >> 6) | (side << 5);
@@ -148,12 +153,13 @@ static void append_sector(struct track *track, unsigned int side, unsigned int s
         append_byte(track, 0xff);
         append_marks(track, 0xad);
         append_byte(track, gcr[sector]);
-        append_payload(track, data);
+        append_payload(track, tag, data);
         append_trailer(track);
 }
 
 static const struct track *encode_track(struct disk_img *disk)
 {
+        static const uint8_t empty_tag[TAG_SIZE] = {0};
         unsigned int cylinder = disk->status.cylinder;
         unsigned int side = disk->status.side;
         struct track *track = &disk->tracks[side];
@@ -176,12 +182,14 @@ static const struct track *encode_track(struct disk_img *disk)
                 append_bits(track, (1u << extra) - 1, extra);
                 for (unsigned int i = 0; i < gap / 10; ++i)
                         append_bits(track, 0x3fc, 10);
-                append_sector(track, side, sector, disk->image + (block + sector) * SECTOR_SIZE);
+                unsigned int index = block + sector;
+                const uint8_t *tag = disk->tags ? disk->tags + index * TAG_SIZE : empty_tag;
+                append_sector(track, side, sector, tag, disk->data + index * SECTOR_SIZE);
         }
         return track;
 }
 
-static uint8_t *load_image(const char *path)
+static uint8_t *load_image(const char *path, size_t *size)
 {
         int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd < 0)
@@ -191,16 +199,19 @@ static uint8_t *load_image(const char *path)
         struct stat st;
         if (fstat(fd, &st) < 0)
                 goto out;
-        if (!S_ISREG(st.st_mode) || st.st_size != DISK_IMG_SIZE) {
+        if (!S_ISREG(st.st_mode) ||
+            (st.st_size != DISK_IMG_SIZE && st.st_size != DC42_DATA_END &&
+             st.st_size != DC42_DATA_END + DC42_TAG_BYTES)) {
                 errno = EINVAL;
                 goto out;
         }
 
-        image = malloc(DISK_IMG_SIZE);
+        *size = st.st_size;
+        image = malloc(*size);
         if (!image)
                 goto out;
-        for (size_t read_bytes = 0; read_bytes < DISK_IMG_SIZE;) {
-                ssize_t count = read(fd, image + read_bytes, DISK_IMG_SIZE - read_bytes);
+        for (size_t read_bytes = 0; read_bytes < *size;) {
+                ssize_t count = read(fd, image + read_bytes, *size - read_bytes);
                 if (count < 0 && errno == EINTR)
                         continue;
                 if (count <= 0) {
@@ -221,14 +232,62 @@ out:
         return image;
 }
 
+static uint32_t diskcopy_checksum(const uint8_t *bytes, size_t length)
+{
+        uint32_t checksum = 0;
+        for (size_t i = 0; i < length; i += 2) {
+                checksum += READ_WORD(bytes, i);
+                checksum = (checksum >> 1) | (checksum << 31);
+        }
+        return checksum;
+}
+
+static int parse_diskcopy(struct disk_img *disk, size_t size)
+{
+        const uint8_t *header = disk->image;
+        uint32_t tag_bytes = READ_LONG(header, 68);
+        /* Apple File Type Note $E0/$0005. Encoding 1 and format $22
+         * identify Macintosh double-sided GCR with 2:1 interleave. */
+        if (header[0] > 63 || READ_LONG(header, 64) != DISK_IMG_SIZE ||
+            (tag_bytes && tag_bytes != DC42_TAG_BYTES) || size != DC42_DATA_END + tag_bytes ||
+            header[80] != 1 || header[81] != 0x22 || READ_WORD(header, 82) != 0x0100)
+                return EINVAL;
+
+        const uint8_t *data = header + DC42_HEADER_SIZE;
+        const uint8_t *tags = header + DC42_DATA_END;
+        if (diskcopy_checksum(data, DISK_IMG_SIZE) != READ_LONG(header, 72))
+                return EBADMSG;
+
+        /* Apple images can omit the first sector tag from the checksum.
+         * The first tag still belongs on the disk. */
+        uint32_t tag_checksum = READ_LONG(header, 76);
+        if (diskcopy_checksum(tags, tag_bytes) != tag_checksum &&
+            (!tag_bytes || diskcopy_checksum(tags + TAG_SIZE, tag_bytes - TAG_SIZE) != tag_checksum))
+                return EBADMSG;
+
+        disk->data = data;
+        disk->tags = tag_bytes ? tags : NULL;
+        return 0;
+}
+
 struct disk_img *disk_img_open(const char *path)
 {
         struct disk_img *disk = calloc(1, sizeof(*disk));
         if (disk && path) {
-                disk->image = load_image(path);
+                size_t size;
+                disk->image = load_image(path, &size);
                 if (!disk->image) {
                         free(disk);
                         return NULL;
+                }
+                disk->data = disk->image;
+                if (size != DISK_IMG_SIZE) {
+                        int error = parse_diskcopy(disk, size);
+                        if (error) {
+                                disk_img_close(disk);
+                                errno = error;
+                                return NULL;
+                        }
                 }
                 disk->inserted = true;
         }

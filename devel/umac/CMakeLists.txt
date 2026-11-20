@@ -79,6 +79,7 @@ if(BUILD_TESTING)
     target_link_libraries(umac_iwm_test PRIVATE umac_core)
     add_test(NAME iwm_controller COMMAND umac_iwm_test controller)
     add_test(NAME iwm_disk_image COMMAND umac_iwm_test disk)
+    add_test(NAME iwm_diskcopy_image COMMAND umac_iwm_test diskcopy)
     add_test(NAME iwm_media_protection
         COMMAND ${CMAKE_COMMAND}
             -DUMAC=$<TARGET_FILE:umac>
@@ -108,7 +109,7 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pram_safety.cmake)
 
     set(UMAC_TEST_PLUS_ROM "" CACHE FILEPATH "User-supplied Mac Plus V3 ROM for integration tests")
-    set(UMAC_TEST_PLUS_FLOPPY "" CACHE FILEPATH "User-supplied bootable raw 800K System Tools floppy")
+    set(UMAC_TEST_PLUS_FLOPPY "" CACHE FILEPATH "User-supplied bootable raw or DiskCopy 4.2 800K System Tools floppy")
     if(UMAC_TEST_PLUS_ROM)
         add_test(NAME scsi_plus_rom COMMAND umac_scsi_test rom "${UMAC_TEST_PLUS_ROM}")
         if(UMAC_TEST_PLUS_FLOPPY)
@@ -117,6 +118,15 @@ if(BUILD_TESTING)
             target_link_libraries(umac_iwm_rom_test PRIVATE umac_core)
             add_test(NAME iwm_plus_rom_boot
                      COMMAND umac_iwm_rom_test "${UMAC_TEST_PLUS_ROM}" "${UMAC_TEST_PLUS_FLOPPY}")
+            if(MEMSIZE EQUAL 4096)
+                find_package(Python3 QUIET COMPONENTS Interpreter)
+                if(Python3_Interpreter_FOUND)
+                    add_test(NAME iwm_desktop_boot
+                             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_iwm_desktop.py"
+                                     $<TARGET_FILE:umac> "${UMAC_TEST_PLUS_ROM}" "${UMAC_TEST_PLUS_FLOPPY}")
+                    set_tests_properties(iwm_desktop_boot PROPERTIES TIMEOUT 25)
+                endif()
+            endif()
         endif()
     endif()
 endif()

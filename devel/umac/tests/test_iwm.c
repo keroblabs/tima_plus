@@ -40,6 +40,18 @@ static uint8_t fixture_byte(unsigned int block, unsigned int offset)
         return (53 * block + 31 * offset) ^ (offset >> 3) ^ (block >> 2);
 }
 
+static uint8_t fixture_tag(unsigned int block, unsigned int offset)
+{
+        return (block >> (8 * (offset % 2))) + 17 * offset + 0x5b;
+}
+
+static uint8_t fixture_payload(unsigned int block, unsigned int offset, bool tagged)
+{
+        if (offset < 12)
+                return tagged ? fixture_tag(block, offset) : 0;
+        return fixture_byte(block, offset - 12);
+}
+
 static void make_image(void)
 {
         int fd = mkstemp(image_path);
@@ -315,7 +327,8 @@ static unsigned int ungcr(const struct disk_img_span *span, unsigned int *positi
         return symbol - code;
 }
 
-static void verify_payload(const struct disk_img_span *span, unsigned int *pos, unsigned int block)
+static void verify_payload(const struct disk_img_span *span, unsigned int *pos, unsigned int block,
+                           bool tagged)
 {
         /* Decode as in Apple's SWIM reference, using full-width sums so
          * carry propagation and the partial final group are checked. */
@@ -326,16 +339,16 @@ static void verify_payload(const struct disk_img_span *span, unsigned int *pos, 
                 c = ((c << 1) & 0xff) | carry;
 
                 unsigned int byte = ((high & 0x30) << 2 | ungcr(span, pos)) ^ c;
-                CHECK(byte == (i < 12 ? 0 : fixture_byte(block, i - 12)));
+                CHECK(byte == fixture_payload(block, i, tagged));
                 unsigned int sum = a + byte + carry;
                 a = sum & 0xff;
                 byte = ((high & 0x0c) << 4 | ungcr(span, pos)) ^ a;
-                CHECK(byte == (i < 12 ? 0 : fixture_byte(block, i + 1 - 12)));
+                CHECK(byte == fixture_payload(block, i + 1, tagged));
                 sum = b + byte + (sum >> 8);
                 b = sum & 0xff;
                 if (i + 2 < 524) {
                         byte = ((high & 3) << 6 | ungcr(span, pos)) ^ b;
-                        CHECK(byte == (i < 12 ? 0 : fixture_byte(block, i + 2 - 12)));
+                        CHECK(byte == fixture_payload(block, i + 2, tagged));
                         c = (c + byte + (sum >> 8)) & 0xff;
                 } else {
                         CHECK((high & 3) == 0);
@@ -348,7 +361,7 @@ static void verify_payload(const struct disk_img_span *span, unsigned int *pos, 
 }
 
 static void verify_track(const struct disk_img_span *span, unsigned int track, unsigned int side,
-                         unsigned int first_block)
+                         unsigned int first_block, bool tagged)
 {
         unsigned int sectors = sector_counts[track / 16];
         CHECK(span->length == track_lengths[track / 16]);
@@ -371,13 +384,13 @@ static void verify_track(const struct disk_img_span *span, unsigned int track, u
                 CHECK(read_bits(span, pos, 24) == 0xd5aaad);
                 pos += 24;
                 CHECK(ungcr(span, &pos) == sector);
-                verify_payload(span, &pos, first_block + sector);
+                verify_payload(span, &pos, first_block + sector, tagged);
                 CHECK(read_bits(span, pos, 32) == 0xdeaaffff);
                 CHECK(pos + 32 == (slot + 1) * span->length / sectors);
         }
 }
 
-static void test_encoded_disk(struct disk_img *disk)
+static void test_encoded_disk(struct disk_img *disk, bool tagged)
 {
         disk_img_command(disk, 4, false);
         uint64_t t = disk_img_status(disk).ready_at;
@@ -391,7 +404,7 @@ static void test_encoded_disk(struct disk_img *disk)
                         struct disk_img_span span = disk_img_advance(disk, t += length * DISK_IMG_BIT_TICKS, true);
                         CHECK(span.count == length && span.first == before);
                         CHECK(disk_img_status(disk).bit_position == before);
-                        verify_track(&span, track, side, block);
+                        verify_track(&span, track, side, block, tagged);
                         block += sector_counts[track / 16];
                 }
                 disk_img_command(disk, 2, false);
@@ -399,6 +412,86 @@ static void test_encoded_disk(struct disk_img *disk)
                 disk_img_advance(disk, t, false);
         }
         CHECK(block == 1600);
+}
+
+static void write_fixture(const uint8_t *bytes, size_t length)
+{
+        FILE *file = fopen(image_path, "wb");
+        CHECK(file);
+        CHECK(fwrite(bytes, 1, length, file) == length);
+        CHECK(fclose(file) == 0);
+}
+
+static void test_diskcopy(void)
+{
+        const unsigned int data_start = 84;
+        const unsigned int tag_start = data_start + DISK_IMG_SIZE;
+        const unsigned int image_size = tag_start + 1600 * 12;
+        uint8_t *image = calloc(1, image_size);
+        CHECK(image);
+        int fd = mkstemp(image_path);
+        CHECK(fd >= 0);
+        atexit(remove_image);
+        CHECK(close(fd) == 0);
+
+        image[0] = 7;
+        memcpy(image + 1, "Test800", 7);
+        WRITE_LONG(image, 64, DISK_IMG_SIZE);
+        WRITE_LONG(image, 68, 1600 * 12);
+        /* Precomputed checksums for the generated sector and tag patterns. */
+        WRITE_LONG(image, 72, 0xffdc66dbu);
+        WRITE_LONG(image, 76, 0x0c3c779fu); /* Omits the first tag. */
+        image[80] = 1;
+        image[81] = 0x22;
+        WRITE_WORD(image, 82, 0x0100);
+        for (unsigned int block = 0; block < 1600; ++block) {
+                for (unsigned int i = 0; i < 512; ++i)
+                        image[data_start + 512 * block + i] = fixture_byte(block, i);
+                for (unsigned int i = 0; i < 12; ++i)
+                        image[tag_start + 12 * block + i] = fixture_tag(block, i);
+        }
+
+        write_fixture(image, image_size);
+        struct disk_img *disk = disk_img_open(image_path);
+        CHECK(disk);
+        test_encoded_disk(disk, true);
+        disk_img_close(disk);
+
+        const unsigned int header_offsets[] = {0, 67, 71, 80, 81, 82};
+        for (size_t i = 0; i < sizeof(header_offsets) / sizeof(header_offsets[0]); ++i) {
+                image[header_offsets[i]] ^= 0x80;
+                write_fixture(image, image_size);
+                CHECK(!disk_img_open(image_path) && errno == EINVAL);
+                image[header_offsets[i]] ^= 0x80;
+        }
+        write_fixture(image, tag_start);
+        CHECK(!disk_img_open(image_path) && errno == EINVAL);
+        write_fixture(image, image_size - 1);
+        CHECK(!disk_img_open(image_path) && errno == EINVAL);
+
+        image[data_start] ^= 1;
+        write_fixture(image, image_size);
+        CHECK(!disk_img_open(image_path) && errno == EBADMSG);
+        image[data_start] ^= 1;
+        image[tag_start + 12] ^= 1;
+        write_fixture(image, image_size);
+        CHECK(!disk_img_open(image_path) && errno == EBADMSG);
+        image[tag_start + 12] ^= 1;
+
+        WRITE_LONG(image, 76, 0x0c553d76u); /* Covers all tags. */
+        write_fixture(image, image_size);
+        disk = disk_img_open(image_path);
+        CHECK(disk);
+        disk_img_close(disk);
+
+        WRITE_LONG(image, 68, 0);
+        WRITE_LONG(image, 76, 0);
+        write_fixture(image, tag_start);
+        disk = disk_img_open(image_path);
+        CHECK(disk);
+        test_encoded_disk(disk, false);
+        disk_img_close(disk);
+        free(image);
 }
 
 static void test_via_timers(void)
@@ -434,6 +527,10 @@ static void test_via_timers(void)
 int main(int argc, char **argv)
 {
         CHECK(argc == 2);
+        if (!strcmp(argv[1], "diskcopy")) {
+                test_diskcopy();
+                return 0;
+        }
         make_image();
         struct disk_img *disk = disk_img_open(image_path);
         CHECK(disk);
@@ -447,7 +544,7 @@ int main(int argc, char **argv)
                 test_latch(disk);
         } else {
                 CHECK(!strcmp(argv[1], "disk"));
-                test_encoded_disk(disk);
+                test_encoded_disk(disk, false);
         }
         disk_img_close(disk);
         return 0;

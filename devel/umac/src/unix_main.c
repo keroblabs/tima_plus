@@ -51,7 +51,7 @@ static void     print_help(char *n)
         printf("Syntax: %s <options>\n"
                "\t-r <rom path>\t\tDefault 'rom.bin'\n"
                "\t-W <rom dump path>\tDump the original ROM bytes\n"
-               "\t-d <floppy path>\tAttach a raw 800K floppy image (read-only)\n"
+               "\t-d <floppy path>\tAttach a raw or DiskCopy 4.2 Macintosh 800K image (read-only)\n"
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
@@ -418,8 +418,14 @@ int     main(int argc, char *argv[])
 
         floppy = disk_img_open(disc_filename);
         if (!floppy) {
-                fprintf(stderr, "Floppy '%s': %s\n", disc_filename ? disc_filename : "(empty drive)",
-                        errno == EINVAL ? "expected a raw 819200-byte (800K) image" : strerror(errno));
+                const char *message;
+                if (errno == EINVAL)
+                        message = "expected a raw or DiskCopy 4.2 Macintosh 800K image";
+                else if (errno == EBADMSG)
+                        message = "DiskCopy 4.2 checksum mismatch";
+                else
+                        message = strerror(errno);
+                fprintf(stderr, "Floppy '%s': %s\n", disc_filename ? disc_filename : "(empty drive)", message);
                 munmap(rom_base, ROM_SIZE);
                 free(pram_path);
                 return 1;
@@ -561,10 +567,12 @@ int     main(int argc, char *argv[])
 
         int done = 0;
         int mouse_button = 0;
-        uint64_t next_vsync = MAC_FRAME_TICKS;
-        uint64_t next_1hz = MAC_C8M_HZ;
-        uint64_t host_start = SDL_GetPerformanceCounter();
-        uint64_t host_hz = SDL_GetPerformanceFrequency();
+        const uint64_t host_hz = SDL_GetPerformanceFrequency();
+        const uint64_t present_interval = host_hz / 60;
+        const uint64_t vbl_interval = host_hz * MAC_FRAME_TICKS / MAC_C8M_HZ;
+        uint64_t next_present = SDL_GetPerformanceCounter();
+        uint64_t next_vsync = next_present + vbl_interval;
+        uint64_t next_1hz = next_present + host_hz;
         do {
                 SDL_Event event;
                 int mousex = 0;
@@ -621,12 +629,15 @@ int     main(int argc, char *argv[])
 
                 done |= umac_loop();
 
-                uint64_t ticks = umac_ticks();
-
-                if (ticks >= next_vsync) {
+                uint64_t host_now = SDL_GetPerformanceCounter();
+                /* The desktop's key repeat and double-click timing follow VBL. */
+                if (host_now >= next_vsync) {
                         umac_vsync_event();
-                        next_vsync += MAC_FRAME_TICKS;
+                        next_vsync = host_now + vbl_interval;
+                }
 
+                if (host_now >= next_present) {
+                        next_present = host_now + present_interval;
                         copy_fb(framebuffer, ram_get_base() + umac_get_fb_offset());
                         SDL_UpdateTexture(texture, NULL, framebuffer,
                                           MAC_SCREEN_WIDTH * sizeof (Uint32));
@@ -634,16 +645,11 @@ int     main(int argc, char *argv[])
                         SDL_RenderCopy(renderer, texture, NULL, NULL);
                         SDL_RenderPresent(renderer);
                 }
-                if (ticks >= next_1hz) {
+                /* The ROM advances its clock by one second for each CA1 event. */
+                if (host_now >= next_1hz) {
                         umac_1hz_event();
-                        next_1hz += MAC_C8M_HZ;
+                        next_1hz += host_hz;
                 }
-
-                uint64_t host_goal = host_start + ticks / MAC_C8M_HZ * host_hz +
-                                     ticks % MAC_C8M_HZ * host_hz / MAC_C8M_HZ;
-                uint64_t host_now = SDL_GetPerformanceCounter();
-                if (!done && host_now < host_goal)
-                        SDL_Delay((host_goal - host_now) * 1000 / host_hz);
         } while (!done);
 
         if (umac_rtc_save(pram_path)) {

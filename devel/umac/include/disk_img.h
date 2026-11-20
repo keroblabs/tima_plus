@@ -29,8 +29,9 @@ struct disk_img_status {
         uint64_t ready_at;
 };
 
-/* NULL path creates an empty internal drive. Other paths must contain a
- * raw 800K image. Returns NULL with errno set on error (EINVAL for format). */
+/* NULL path creates an empty internal drive. Images can be raw or DiskCopy
+ * 4.2 Macintosh 800K. Returns NULL with errno set on error (EINVAL for
+ * format, EBADMSG for checksum mismatch). */
 struct disk_img *disk_img_open(const char *path);
 void disk_img_close(struct disk_img *disk);
 
