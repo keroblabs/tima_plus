@@ -26,9 +26,9 @@
 #
 
 DEBUG ?= 0
-MEMSIZE ?= 128
+MEMSIZE ?= 4096
 
-SOURCES = $(wildcard src/*.c)
+SOURCES = $(filter-out src/disc.c,$(wildcard src/*.c))
 
 MUSASHI = ../Musashi
 MUSASHI_BUILD = build/musashi
@@ -52,11 +52,6 @@ ifeq ($(DEBUG),1)
 	CFLAGS += -Og -g -ggdb -DDEBUG
 endif
 
-# Basic support for changing screen res (with the MacPlusV3 ROM)
-DISP_WIDTH ?= 512
-DISP_HEIGHT ?= 342
-CFLAGS_CFG = -DDISP_WIDTH=$(DISP_WIDTH) -DDISP_HEIGHT=$(DISP_HEIGHT)
-
 .PHONY: all prepare clean
 all:	main
 
@@ -73,10 +68,10 @@ $(MUSASHI_OBJS): $(MUSASHI)/m68kops.h
 
 $(MUSASHI_BUILD)/%.o: $(MUSASHI)/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(CFLAGS_CFG) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 %.o:	%.c
-	$(CC) $(CFLAGS) $(CFLAGS_CFG) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 main:	$(OBJS)
 	@echo Linking $(OBJS)

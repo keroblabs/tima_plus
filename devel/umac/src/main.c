@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <limits.h>
 #include <setjmp.h>
 #include <time.h>
 
@@ -45,8 +46,8 @@
 #include "m68k.h"
 #include "via.h"
 #include "scc.h"
-#include "rom.h"
-#include "disc.h"
+#include "iwm.h"
+#include "umac.h"
 #include "scsi5380.h"
 #include "rtc.h"
 
@@ -71,18 +72,97 @@ static unsigned int g_int_controller_pending = 0;      /* list of pending interr
 static unsigned int g_int_controller_highest_int = 0;  /* Highest pending interrupt */
 
 uint8_t *_ram_base;
-uint8_t *_rom_base;
+const uint8_t *_rom_base;
 
 int overlay = 1;
-static uint64_t global_time_us = 0;
 static int sim_done = 0;
 static jmp_buf main_loop_jb;
-
 static int disassemble = 0;
 
-#define UMAC_EXECLOOP_QUANTUM   5000
+#define UMAC_QUANTUM_TICKS      (MAC_C8M_HZ / 200) /* 5 ms */
+
+static struct iwm iwm;
+static FILE *iwm_trace_stream;
+static unsigned int last_trace_sense;
+static uint64_t machine_ticks, bus_ticks, via_bus_ticks;
+static uint64_t via_irq_at = UINT64_MAX;
+static bool cpu_running;
 
 static void    update_overlay_layout(void);
+
+enum bus_device { BUS_RAM, BUS_GRID, BUS_VIA, BUS_SCC, BUS_OTHER };
+
+/* Musashi deducts the instruction's nominal cost after the last memory
+ * callback. Place its ordered bus transfers in 4-clock slots from the
+ * instruction hook, then charge extra waits to Musashi's elapsed time.
+ * The Plus TSM PAL phase model is an approximation of bus completion. */
+static uint64_t bus_access(unsigned int words, enum bus_device device)
+{
+        if (!cpu_running)
+                return machine_ticks;
+
+        unsigned int waits = 0;
+        while (words--) {
+                unsigned int phase = bus_ticks & 7;
+                unsigned int wait = 0;
+                switch (device) {
+                case BUS_RAM: {
+                        unsigned int raster = bus_ticks % MAC_FRAME_TICKS;
+                        unsigned int x = raster % MAC_LINE_TICKS;
+                        bool video = raster >= 28 * MAC_LINE_TICKS && x < 256;
+                        wait = (video || x >= 344) ? (5u - phase) & 7 : (1u - phase) & 3;
+                        break;
+                }
+                case BUS_GRID: wait = (1u - phase) & 3; break;
+                case BUS_VIA:  wait = 6 + (10 - bus_ticks % MAC_VIA_DIVISOR) % MAC_VIA_DIVISOR; break;
+                case BUS_SCC:  wait = 1 + ((4u - phase) & 7); break;
+                case BUS_OTHER: break;
+                }
+                bus_ticks += 4 + wait;
+                waits += wait;
+        }
+        if (waits)
+                m68k_add_wait_cycles(waits);
+        return bus_ticks - 1;
+}
+
+static void trace_iwm(char op, unsigned int address, uint8_t value, uint8_t old, uint64_t ticks)
+{
+        unsigned int reg = iwm_drive_register(&iwm);
+        unsigned int q = iwm.switches & (IWM_Q6 | IWM_Q7);
+        bool sense = op == 'R' && q == IWM_Q6;
+        unsigned int sample = (reg << 8) | value;
+        bool mark = op == 'R' && !q && (value == 0xd5 || value == 0xaa);
+        if (op == 'R' && old == iwm.switches && !mark && !(sense && sample != last_trace_sense))
+                return;
+        if (sense)
+                last_trace_sense = sample;
+
+        struct disk_img_status drive = disk_img_status(iwm.internal);
+        uint8_t enables = iwm_drive_enables(&iwm);
+        uint64_t cpu_ticks = cpu_running ? machine_ticks + m68k_cycles_run() : machine_ticks;
+        fprintf(iwm_trace_stream,
+                "IWM t=%" PRIu64 " cpu_t=%" PRIu64 " pc=%06x %c %06x=%02x q6=%u q7=%u ph=%x sel=%u"
+                " drive=%u enbl=%u/%u motor=%u off_at=%" PRIu64 " reg=%u cmd=%d ca2=%u mode=%02x"
+                " dir=%u trk=%u side=%u spindle=%u step=%" PRIu64 " ready=%" PRIu64
+                " ready_n=%u tach=%u media=%u bit=%u latch=%02x\n",
+                ticks, cpu_ticks, m68k_get_reg(NULL, M68K_REG_PPC), op, address, value,
+                !!(q & IWM_Q6), !!(q & IWM_Q7), iwm.switches & 15, iwm.sel,
+                !!(iwm.switches & IWM_EXTERNAL), !(enables & IWM_ENBL1), !(enables & IWM_ENBL2),
+                !!(iwm.switches & IWM_MOTOR), iwm.motor_off_at, reg,
+                (enables & IWM_ENBL1) && !(old & IWM_STROBE) && (iwm.switches & IWM_STROBE)
+                        ? (int)(reg & 7) : -1,
+                !!(iwm.switches & IWM_PHASE2), iwm.mode, drive.step_out, drive.cylinder, drive.side,
+                drive.spindle, drive.step_done_at, drive.ready_at, disk_img_sense(iwm.internal, 13),
+                disk_img_sense(iwm.internal, 7), !disk_img_sense(iwm.internal, 1),
+                drive.bit_position, iwm.latch);
+}
+
+void umac_iwm_trace(FILE *stream)
+{
+        iwm_trace_stream = stream;
+        last_trace_sense = UINT_MAX;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -179,20 +259,24 @@ int     umac_rtc_save(const char *path)
 // VIA-related controls
 static void     via_ra_changed(uint8_t val)
 {
-        static uint8_t oldval = 0x10;
         // 7 = scc w/req,a,b (in, indicates RX pending, w/o IRQ)
         // 6 = vid.pg2 (screen buffer select)
         // 5 = hd.sel (SEL line, select head)
         // 4 = overlay
         // 3 = snd.pg2 (sound buffer select)
         // [2:0] = sound volume
-        overlay = !!(val & 0x10);
-        if ((oldval ^ val) & 0x10) {
+        if (overlay != !!(val & 0x10)) {
+                overlay = !!(val & 0x10);
                 MDBG("OVERLAY CHANGING\n");
                 update_overlay_layout();
         }
+}
 
-        oldval = val;
+static void     via_ra_pins(uint8_t ora, uint8_t ddra)
+{
+        bool sel = (ora & ddra & 0x20) != 0;
+        if (sel != iwm.sel)
+                iwm_set_sel(&iwm, sel, via_bus_ticks);
 }
 
 static void     via_rb_changed(uint8_t val)
@@ -208,7 +292,8 @@ static void     via_rb_changed(uint8_t val)
 
 static uint8_t  via_ra_in(void)
 {
-        return 0;
+        /* SCC W/REQ is high (no RX pending). The SCC has no RX source. */
+        return 0x80;
 }
 
 // Quadrature bits read from B[5:4] (Y=5, X=4)
@@ -261,7 +346,7 @@ static void     via_sr_tx(uint8_t data)
                      data, kbd_last_cmd);
         }
         kbd_last_cmd = data;
-        kbd_last_cmd_time = global_time_us;
+        kbd_last_cmd_time = via_bus_ticks;
 }
 
 static int kbd_pending_evt = -1;
@@ -297,7 +382,7 @@ static void     kbd_check_work(void)
          * hastiness).
          */
         if (kbd_last_cmd &&
-            ((global_time_us - kbd_last_cmd_time) > UMAC_EXECLOOP_QUANTUM)) {
+            ((machine_ticks - kbd_last_cmd_time) > UMAC_QUANTUM_TICKS)) {
                 MDBG("KBD: got cmd 0x%x\n", kbd_last_cmd);
                 kbd_rx(kbd_last_cmd);
                 kbd_last_cmd = 0;
@@ -321,6 +406,8 @@ static void     via_irq_set(int status)
         if (status) {
                 // IRQ is asserted
                 m68k_set_virq(1, 1);
+                if (cpu_running && m68k_cycles_remaining() > 0)
+                        m68k_end_timeslice();
         } else {
                 // IRQ de-asserted
                 m68k_set_virq(1, 0);
@@ -343,35 +430,27 @@ static void     scc_irq_set(int status)
 ////////////////////////////////////////////////////////////////////////////////
 // IWM
 
-static uint8_t iwm_regs[16];
-
-void    iwm_write(unsigned int address, uint8_t data)
+static uint8_t read_iwm(unsigned int address)
 {
-        unsigned int r = (address >> 9) & 0xf;
-        MDBG("[IWM: WR %02x -> %d]\n", data, r);
-        switch (r) {
-        default:
-                MDBG("[IWM: unhandled WR %02x to reg %d]\n", data, r);
-        }
-        iwm_regs[r] = data;
+        uint64_t ticks = bus_access(1, BUS_GRID);
+        if (!(address & 1))
+                return 0xff;
+        uint8_t old = iwm.switches;
+        uint8_t data = iwm_read(&iwm, address, ticks);
+        if (iwm_trace_stream)
+                trace_iwm('R', address, data, old, ticks);
+        return data;
 }
 
-uint8_t iwm_read(unsigned int address)
+static void write_iwm(unsigned int address, uint8_t data)
 {
-        unsigned int r = (address >> 9) & 0xf;
-        uint8_t data = iwm_regs[r];
-        switch (r) {
-        case 8:
-                data = 0xff;
-                break;
-        case 14:
-                data = 0x1f;
-                break;
-        default:
-                MDBG("[IWM: unhandled RD of reg %d]\n", r);
+        uint64_t ticks = bus_access(1, BUS_GRID);
+        if (address & 1) {
+                uint8_t old = iwm.switches;
+                iwm_write(&iwm, address, data, ticks);
+                if (iwm_trace_stream)
+                        trace_iwm('W', address, data, old, ticks);
         }
-        MDBG("[IWM: RD %d <- %02x]\n", r, data);
-        return data;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -426,24 +505,37 @@ unsigned int (*cpu_read_instr)(unsigned int address) = cpu_read_instr_overlay;
 unsigned int    FAST_FUNC(cpu_read_byte)(unsigned int address)
 {
         /* Most likely a RAM access, followed by a ROM access, then I/O */
-        if (IS_RAM(address))
+        if (IS_RAM(address)) {
+                bus_access(1, BUS_RAM);
                 return RAM_RD8(CLAMP_RAM_ADDR(address));
-        if (IS_ROM_WINDOW(address))
+        }
+        if (IS_ROM_WINDOW(address)) {
+                bus_access(1, BUS_GRID);
                 return rom_read_byte(address);
+        }
 
         // decode IO etc
-        if (IS_VIA(address))
-                return via_read(address);
+        if (IS_VIA(address)) {
+                via_bus_ticks = bus_access(1, BUS_VIA);
+                via_advance(via_bus_ticks);
+                uint8_t value = via_read(address);
+                via_irq_at = via_next_timer_irq();
+                return value;
+        }
         if (IS_IWM(address))
-                return iwm_read(address);
-        if (IS_SCC_RD(address))
+                return read_iwm(address);
+        if (IS_SCC_RD(address)) {
+                bus_access(1, BUS_SCC);
                 return scc_read(address);
+        }
         if (IS_SCSI(address)) {
+                bus_access(1, BUS_GRID);
                 if (address & 1)
                         return 0;
                 return SCSI_DACK(address) ? ncr5380_pseudo_dma_read()
                                           : ncr5380_read_register(SCSI_REG(address));
         }
+        bus_access(1, BUS_OTHER);
         if (IS_DUMMY(address))
                 return 0;
 
@@ -453,14 +545,21 @@ unsigned int    FAST_FUNC(cpu_read_byte)(unsigned int address)
 
 unsigned int    FAST_FUNC(cpu_read_word)(unsigned int address)
 {
-        if (IS_RAM(address))
+        if (IS_RAM(address)) {
+                bus_access(1, BUS_RAM);
                 return RAM_RD16(CLAMP_RAM_ADDR(address));
-        if (IS_ROM_WINDOW(address))
+        }
+        if (IS_ROM_WINDOW(address)) {
+                bus_access(1, BUS_GRID);
                 return rom_read_word(address);
+        }
 
+        if (IS_IWM(address))
+                return 0xff00 | read_iwm(address + 1);
         /* SCSI reads use the upper lane: one NCR access per 68000 word cycle. */
         if (IS_SCSI(address))
                 return (address & 1) ? 0 : cpu_read_byte(address) << 8;
+        bus_access(1, BUS_OTHER);
         if (IS_TESTSW(address))
                 return 0;
 
@@ -470,17 +569,26 @@ unsigned int    FAST_FUNC(cpu_read_word)(unsigned int address)
 
 unsigned int    FAST_FUNC(cpu_read_long)(unsigned int address)
 {
-        if (IS_RAM(address))
+        if (IS_RAM(address)) {
+                bus_access(2, BUS_RAM);
                 return RAM_RD32(CLAMP_RAM_ADDR(address));
-        if (IS_ROM_WINDOW(address))
+        }
+        if (IS_ROM_WINDOW(address)) {
+                bus_access(2, BUS_GRID);
                 return rom_read_long(address);
+        }
 
+        if (IS_IWM(address) && IS_IWM(address + 2)) {
+                unsigned int high = cpu_read_word(address);
+                return (high << 16) | cpu_read_word(address + 2);
+        }
         if (IS_SCSI(address)) {
                 if (address & 1)
                         return 0;
                 unsigned int high = cpu_read_word(address);
                 return (high << 16) | cpu_read_word(address + 2);
         }
+        bus_access(2, BUS_OTHER);
         if (IS_TESTSW(address))
                 return 0;
 
@@ -516,24 +624,33 @@ unsigned int    cpu_read_long_dasm(unsigned int address)
 void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
+                bus_access(1, BUS_RAM);
                 RAM_WR8(CLAMP_RAM_ADDR(address), value);
                 return;
         }
 
         // decode IO
         if (IS_VIA(address)) {
+                via_bus_ticks = bus_access(1, BUS_VIA);
+                via_advance(via_bus_ticks);
+                bool old_sel = iwm.sel;
                 via_write(address, value);
+                if (iwm_trace_stream && old_sel != iwm.sel)
+                        trace_iwm('A', address, value, iwm.switches, via_bus_ticks);
+                via_irq_at = via_next_timer_irq();
                 return;
         }
         if (IS_IWM(address)) {
-                iwm_write(address, value);
+                write_iwm(address, value);
                 return;
         }
         if (IS_SCC_WR(address)) {
+                bus_access(1, BUS_SCC);
                 scc_write(address, value);
                 return;
         }
         if (IS_SCSI(address)) {
+                bus_access(1, BUS_GRID);
                 if (address & 1) {
                         if (SCSI_DACK(address))
                                 ncr5380_pseudo_dma_write(value);
@@ -542,21 +659,21 @@ void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
                 }
                 return;
         }
+        bus_access(1, BUS_OTHER);
         if (IS_DUMMY(address))
                 return;
-        if (address == PV_SONY_ADDR) {
-                int r = disc_pv_hook(value);
-                if (r)
-                        exit_error("Disc PV hook failed (%02x)", value);
-                return;
-        }
         printf("Ignoring write %02x to address %08x\n", value&0xff, address);
 }
 
 void    FAST_FUNC(cpu_write_word)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
+                bus_access(1, BUS_RAM);
                 RAM_WR16(CLAMP_RAM_ADDR(address), value);
+                return;
+        }
+        if (IS_IWM(address)) {
+                write_iwm(address + 1, value);
                 return;
         }
         if (IS_SCSI(address)) {
@@ -564,22 +681,25 @@ void    FAST_FUNC(cpu_write_word)(unsigned int address, unsigned int value)
                         cpu_write_byte(address + 1, value & 0xff);
                 return;
         }
+        bus_access(1, BUS_OTHER);
         printf("Ignoring write %04x to address %08x\n", value&0xffff, address);
 }
 
 void    FAST_FUNC(cpu_write_long)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
+                bus_access(2, BUS_RAM);
                 RAM_WR32(CLAMP_RAM_ADDR(address), value);
                 return;
         }
-        if (IS_SCSI(address)) {
+        if ((IS_IWM(address) && IS_IWM(address + 2)) || IS_SCSI(address)) {
                 if (!(address & 1)) {
                         cpu_write_word(address, value >> 16);
                         cpu_write_word(address + 2, value & 0xffff);
                 }
                 return;
         }
+        bus_access(2, BUS_OTHER);
         printf("Ignoring write %08x to address %08x\n", value, address);
 }
 
@@ -597,6 +717,10 @@ static void     update_overlay_layout(void)
 void    cpu_pulse_reset(void)
 {
         ncr5380_reset();
+        uint64_t ticks = cpu_running ? bus_ticks : machine_ticks;
+        bool sel = iwm.sel;
+        iwm_reset(&iwm, ticks);
+        iwm_set_sel(&iwm, sel, ticks);
 }
 
 /* Called when the CPU acknowledges an interrupt */
@@ -653,6 +777,16 @@ void    cpu_instr_callback(int pc)
 	static char buff2[100];
 	static unsigned int instr_size;
 
+        if (cpu_running) {
+                uint64_t start = machine_ticks + m68k_cycles_run();
+                if (start > bus_ticks)
+                        bus_ticks = start;
+                if (bus_ticks >= via_irq_at) {
+                        via_advance(bus_ticks);
+                        via_irq_at = via_next_timer_irq();
+                }
+        }
+
         if (!disassemble)
                 return;
 
@@ -662,16 +796,8 @@ void    cpu_instr_callback(int pc)
 	fflush(stdout);
 }
 
-int     umac_init(void *ram_base, void *rom_base, disc_descr_t discs[DISC_NUM_DRIVES])
+static void reset_via(void)
 {
-        _ram_base = ram_base;
-        _rom_base = rom_base;
-
-        ncr5380_reset();
-	m68k_init();
-	m68k_set_cpu_type(M68K_CPU_TYPE_68000);
-	m68k_pulse_reset();
-
         struct via_cb vcb = { .ra_change = via_ra_changed,
                               .rb_change = via_rb_changed,
                               .ra_in = via_ra_in,
@@ -679,16 +805,38 @@ int     umac_init(void *ram_base, void *rom_base, disc_descr_t discs[DISC_NUM_DR
                               .sr_tx = via_sr_tx,
                               .irq_set = via_irq_set,
                               .rb_pins = via_rtc_pins,
+                              .ra_pins = via_ra_pins,
         };
         via_init(&vcb);
+        via_advance(machine_ticks);
+        via_irq_at = UINT64_MAX;
+        via_bus_ticks = machine_ticks;
+        iwm_set_sel(&iwm, false, machine_ticks);
+}
+
+int     umac_init(void *ram_base, const void *rom_base, struct disk_img *internal_floppy)
+{
+        _ram_base = ram_base;
+        _rom_base = rom_base;
+        machine_ticks = bus_ticks = via_bus_ticks = 0;
+        cpu_running = false;
+        sim_done = 0;
+        overlay = 1;
+        update_overlay_layout();
+        iwm_init(&iwm, internal_floppy, machine_ticks);
+
+        ncr5380_reset();
+	m68k_init();
+	m68k_set_cpu_type(M68K_CPU_TYPE_68000);
+	m68k_pulse_reset();
+
+        reset_via();
         struct rtc_time_provider rtp = { .get_unix_seconds = rtc_host_time_cb,
                                          .ctx = NULL };
         rtc_init(&rtc, &rtp);
         struct scc_cb scb = { .irq_set = scc_irq_set,
         };
         scc_init(&scb);
-        disc_init(discs);
-
         return 0;
 }
 
@@ -790,19 +938,16 @@ static void     mouse_tick(void)
 void    umac_reset(void)
 {
         overlay = 1;
-        ncr5380_reset();
+        update_overlay_layout();
+        cpu_pulse_reset();
         rtc_reset(&rtc);
         m68k_pulse_reset();
+        reset_via();
 }
 
-/* Called by the disc code when an eject op happens. */
-void    umac_disc_ejected(void)
+uint64_t umac_ticks(void)
 {
-#ifdef SIM
-        exit(1);
-#else
-        umac_reset();
-#endif
+        return machine_ticks;
 }
 
 /* Run the emulator for about a frame.
@@ -810,14 +955,26 @@ void    umac_disc_ejected(void)
  */
 int     umac_loop(void)
 {
-        setjmp(main_loop_jb);
+        if (sim_done || setjmp(main_loop_jb)) {
+                cpu_running = false;
+                return 1;
+        }
 
-        const int us = UMAC_EXECLOOP_QUANTUM;
-        m68k_execute(us*8);
-        global_time_us += us;
+        uint64_t end = machine_ticks + UMAC_QUANTUM_TICKS;
+        do {
+                uint64_t deadline = via_irq_at < end ? via_irq_at : end;
+                bus_ticks = machine_ticks;
+                cpu_running = true;
+                int elapsed = m68k_execute(deadline - machine_ticks);
+                cpu_running = false;
+                machine_ticks += elapsed;
+                if (bus_ticks > machine_ticks)
+                        machine_ticks = bus_ticks;
+                via_advance(machine_ticks);
+                via_irq_at = via_next_timer_irq();
+        } while (machine_ticks < end);
 
-        // Device polling
-        via_tick(global_time_us);
+        iwm_advance(&iwm, machine_ticks);
         mouse_tick();
         kbd_check_work();
 

@@ -8,7 +8,8 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-r", "devel/umac/rom.bin",
-                "-s", "devel/umac/HD10_512.hda"
+                "-s", "devel/umac/HD10_512.hda",
+                "-d", "devel/umac/plus-system.image"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

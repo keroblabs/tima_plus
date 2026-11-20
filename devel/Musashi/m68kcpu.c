@@ -957,17 +957,16 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 /* ASG: removed per-instruction interrupt checks */
 int m68k_execute(int num_cycles)
 {
-	/* eat up any reset cycles */
-	if (RESET_CYCLES) {
-	    int rc = RESET_CYCLES;
-	    RESET_CYCLES = 0;
-	    num_cycles -= rc;
-	    if (num_cycles <= 0)
-		return rc;
+	/* Charge reset cycles to the slice and to callbacks' elapsed time. */
+	int reset_cycles = RESET_CYCLES;
+	if (reset_cycles >= num_cycles) {
+		RESET_CYCLES -= num_cycles;
+		return num_cycles;
 	}
+	RESET_CYCLES = 0;
 
 	/* Set our pool of clock cycles available */
-	SET_CYCLES(num_cycles);
+	SET_CYCLES(num_cycles - reset_cycles);
 	m68ki_initial_cycles = num_cycles;
 
 	/* See if interrupts came in */
@@ -1030,6 +1029,11 @@ int m68k_cycles_run(void)
 int m68k_cycles_remaining(void)
 {
 	return GET_CYCLES();
+}
+
+void m68k_add_wait_cycles(int cycles)
+{
+	USE_CYCLES(cycles);
 }
 
 /* Change the timeslice */

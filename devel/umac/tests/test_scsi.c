@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "b2_macos_util.h"
 #include "cpu_cb.h"
 #include "m68k.h"
 #include "scsi_disk.h"
@@ -538,12 +537,11 @@ static void test_plus_rom_decode(void)
 {
         uint8_t *ram = calloc(1, RAM_SIZE);
         uint8_t *rom = calloc(1, ROM_SIZE);
-        disc_descr_t floppy[DISC_NUM_DRIVES] = {0};
         CHECK(ram && rom);
         memcpy(rom, "\x12\x34\x56\x78", 4);
         rom[ROM_SIZE - 2] = 0x9a;
         rom[ROM_SIZE - 1] = 0xbc;
-        CHECK(umac_init(ram, rom, floppy) == 0);
+        CHECK(umac_init(ram, rom, NULL) == 0);
 
         /* These are the two addresses the Plus ROM uses to detect SCSI. */
         CHECK(cpu_read_long(0x420000) != cpu_read_long(0x440000));
@@ -553,40 +551,6 @@ static void test_plus_rom_decode(void)
         CHECK(cpu_read_instr_word(0x440000) == 0x1234);
         CHECK(cpu_read_instr_word(0x420000) == 0xffff);
         CHECK(cpu_read_long(0) == 0x12345678 && cpu_read_long(0x020000) == 0xffffffffu);
-        free(rom);
-        free(ram);
-}
-
-static void test_floppy_presence(void)
-{
-        enum { PB = 0x1000, DCE = 0x1100, DRIVE_STATUS = 0x1200, BUFFER = 0x1300 };
-        uint8_t *ram = calloc(1, RAM_SIZE);
-        uint8_t *rom = calloc(1, ROM_SIZE);
-        disc_descr_t floppy[DISC_NUM_DRIVES] = {0};
-        CHECK(ram && rom);
-        CHECK(umac_init(ram, rom, floppy) == 0);
-        m68k_set_reg(M68K_REG_A0, PB);
-        m68k_set_reg(M68K_REG_A1, DCE);
-        m68k_set_reg(M68K_REG_A2, DRIVE_STATUS);
-        RAM_WR16(PB + ioVRefNum, 1);
-        RAM_WR16(PB + ioTrap, aRdCmd);
-        RAM_WR32(PB + ioBuffer, BUFFER);
-        RAM_WR32(PB + ioReqCount, 1024);
-
-        CHECK(disc_pv_hook(0) == 0);      /* Open. */
-        CHECK(RAM_RD8(DRIVE_STATUS + dsInstalled) == 1);
-        CHECK(disc_pv_hook(1) == 0);      /* Prime: empty drive, not a bad read. */
-        CHECK((m68k_get_reg(NULL, M68K_REG_D0) & 0xffff) == (uint16_t)offLinErr);
-        CHECK(RAM_RD32(PB + ioActCount) == 0);
-        RAM_WR16(PB + csCode, 7);       /* Ejecting nothing must not exit. */
-        CHECK(disc_pv_hook(2) == 0 && m68k_get_reg(NULL, M68K_REG_D0) == noErr);
-
-        uint8_t media[1024] = {0x4c, 0x4b};
-        floppy[0] = (disc_descr_t){ .base = media, .size = sizeof(media) };
-        disc_init(floppy);
-        CHECK(disc_pv_hook(0) == 0 && RAM_RD8(DRIVE_STATUS + dsDiskInPlace) == 1);
-        CHECK(disc_pv_hook(1) == 0 && m68k_get_reg(NULL, M68K_REG_D0) == noErr);
-        CHECK(memcmp(ram + BUFFER, media, sizeof(media)) == 0);
         free(rom);
         free(ram);
 }
@@ -637,8 +601,7 @@ static void test_original_rom(const char *rom_path)
         CHECK(file && rom && ram);
         CHECK(fread(rom, 1, ROM_SIZE, file) == ROM_SIZE && fgetc(file) == EOF && !ferror(file));
         CHECK(fclose(file) == 0 && !memcmp(rom, "\x4d\x1f\x81\x72", 4));
-        disc_descr_t floppy[DISC_NUM_DRIVES] = {0};
-        umac_init(ram, rom, floppy);
+        umac_init(ram, rom, NULL);
         cpu_write_word(ROM_RETURN, 0x60fe);       /* BRA.S to self. */
         m68k_set_reg(M68K_REG_A3, SCSI);
         m68k_set_reg(M68K_REG_A4, SCSI + 1);
@@ -676,7 +639,6 @@ int main(int argc, char **argv)
         } else if (argc == 2 && !strcmp(argv[1], "disk")) {
                 test_disk_backend();
                 test_disk();
-                test_floppy_presence();
         } else if (argc == 3 && !strcmp(argv[1], "rom")) {
                 test_original_rom(argv[2]);
         } else {

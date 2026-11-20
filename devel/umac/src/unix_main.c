@@ -33,7 +33,6 @@
 #include <getopt.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -43,7 +42,6 @@
 #include "rtc.h"
 #include "umac.h"
 #include "machw.h"
-#include "disc.h"
 #include "scsi_disk.h"
 
 #include "keymap_sdl.h"
@@ -52,20 +50,20 @@ static void     print_help(char *n)
 {
         printf("Syntax: %s <options>\n"
                "\t-r <rom path>\t\tDefault 'rom.bin'\n"
-               "\t-W <rom dump path>\tDump ROM after patching\n"
-               "\t-d <disc path>\n"
-               "\t-w\t\t\tEnable persistent disc writes (default R/O)\n"
+               "\t-W <rom dump path>\tDump the original ROM bytes\n"
+               "\t-d <floppy path>\tAttach a raw or DiskCopy 4.2 Macintosh 800K image (read-only)\n"
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
                "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
-               "\t-i\t\t\tDisassembled instruction trace\n", n);
+               "\t-i\t\t\tDisassembled instruction trace\n"
+               "\t--trace-iwm\t\tTrace IWM and Sony drive events\n", n);
 }
 
 #define DISP_SCALE      2
 #define UMAC_MOUSE_FREE_TITLE "umac (click to capture mouse)"
 
-static uint32_t framebuffer[DISP_WIDTH*DISP_HEIGHT];
+static uint32_t framebuffer[MAC_SCREEN_WIDTH*MAC_SCREEN_HEIGHT];
 
 static bool     set_mouse_capture(SDL_Window *window, SDL_bool capture)
 {
@@ -181,16 +179,14 @@ static int      paths_alias(const char *a, const char *b, bool *alias)
         return -1;
 }
 
-static int      reject_pram_aliases(const char *pram_path,
-                                    const char *const *protected_paths,
-                                    size_t protected_count,
-                                    const char **conflicting_path)
+static int      find_path_alias(const char *path, const char *const *protected_paths,
+                                size_t protected_count, const char **conflicting_path)
 {
         for (size_t i = 0; i < protected_count; i++) {
                 if (!protected_paths[i])
                         continue;
                 bool alias;
-                if (paths_alias(pram_path, protected_paths[i], &alias) != 0)
+                if (paths_alias(path, protected_paths[i], &alias) != 0)
                         return -1;
                 if (alias) {
                         *conflicting_path = protected_paths[i];
@@ -206,10 +202,10 @@ static int      reject_pram_aliases(const char *pram_path,
 static void     copy_fb(uint32_t *fb_out, uint8_t *fb_in)
 {
         // Output L-R, big-endian shorts, with bits in MSB-LSB order:
-        for (int y = 0; y < DISP_HEIGHT; y++) {
-                for (int x = 0; x < DISP_WIDTH; x += 16) {
-                        uint8_t plo = fb_in[x/8 + (y * DISP_WIDTH/8) + 0];
-                        uint8_t phi = fb_in[x/8 + (y * DISP_WIDTH/8) + 1];
+        for (int y = 0; y < MAC_SCREEN_HEIGHT; y++) {
+                for (int x = 0; x < MAC_SCREEN_WIDTH; x += 16) {
+                        uint8_t plo = fb_in[x/8 + (y * MAC_SCREEN_WIDTH/8) + 0];
+                        uint8_t phi = fb_in[x/8 + (y * MAC_SCREEN_WIDTH/8) + 1];
                         for (int i = 0; i < 8; i++) {
                                 *fb_out++ = (plo & (0x80 >> i)) ? 0 : 0xffffffff;
                         }
@@ -222,26 +218,19 @@ static void     copy_fb(uint32_t *fb_out, uint8_t *fb_in)
 
 /**********************************************************************/
 
-/* The emulator core expects to be given ROM and RAM pointers,
- * with ROM already pre-patched.  So, load the file & use the
- * helper to patch it, then pass it in.
- *
- * In an embedded scenario the ROM is probably const and in flash,
- * and so ought to be pre-patched.
- */
 int     main(int argc, char *argv[])
 {
-        void *ram_base;
+        void *ram_base = MAP_FAILED;
         void *rom_base;
-        void *disc_base;
-        char *rom_filename = "rom.bin";
-        char *rom_dump_filename = NULL;
-        char *ram_filename = "ram.bin";
-        char *disc_filename = NULL;
+        struct disk_img *floppy = NULL;
+        const char *rom_filename = "rom.bin";
+        const char *rom_dump_filename = NULL;
+        const char *ram_filename = "ram.bin";
+        const char *disc_filename = NULL;
         int ofd;
         int ch;
         int opt_disassemble = 0;
-        int opt_write = 0;
+        bool opt_iwm_trace = false;
         const char *scsi_filename = NULL;
         int scsi_id = -1;
         bool scsi_write = false;
@@ -252,10 +241,14 @@ int     main(int argc, char *argv[])
         ////////////////////////////////////////////////////////////////////////
         // Args
 
-        while ((ch = getopt(argc, argv, "r:d:W:s:t:P:ihwp")) != -1) {
+        const struct option long_options[] = {
+                {"trace-iwm", no_argument, NULL, 'I'},
+                {0}
+        };
+        while ((ch = getopt_long(argc, argv, "r:d:W:s:t:P:ihwp", long_options, NULL)) != -1) {
                 switch (ch) {
                 case 'r':
-                        rom_filename = strdup(optarg);
+                        rom_filename = optarg;
                         break;
 
                 case 'i':
@@ -263,15 +256,19 @@ int     main(int argc, char *argv[])
                         break;
 
                 case 'd':
-                        disc_filename = strdup(optarg);
+                        disc_filename = optarg;
                         break;
 
                 case 'w':
-                        opt_write = 1;
+                        fprintf(stderr, "-w is unavailable with the read-only IWM floppy drive\n");
+                        return 1;
+
+                case 'I':
+                        opt_iwm_trace = true;
                         break;
 
                 case 'W':
-                        rom_dump_filename = strdup(optarg);
+                        rom_dump_filename = optarg;
                         break;
 
                 case 's':
@@ -307,6 +304,26 @@ int     main(int argc, char *argv[])
         if (scsi_id == -1)
                 scsi_id = 1;
 
+        /* RAM and ROM dumps are writable outputs. Reject aliases of the
+         * read-only inputs before creating or truncating either output. */
+        const char *inputs[] = {rom_filename, disc_filename, scsi_filename, rom_dump_filename};
+        size_t count = sizeof(inputs) / sizeof(inputs[0]);
+        const char *conflicting_path = NULL;
+        int conflict = find_path_alias(ram_filename, inputs, count, &conflicting_path);
+        const char *output = ram_filename;
+        if (!conflict && rom_dump_filename) {
+                output = rom_dump_filename;
+                conflict = find_path_alias(output, inputs, count - 1, &conflicting_path);
+        }
+        if (conflict != 0) {
+                if (conflict > 0)
+                        fprintf(stderr, "Output '%s' conflicts with media/output path '%s'\n",
+                                output, conflicting_path);
+                else
+                        fprintf(stderr, "Cannot validate output '%s': %s\n", output, strerror(errno));
+                return 1;
+        }
+
         /* Resolve and validate the PRAM destination before any media or
          * output file is opened.  This catches direct, symlink and hard-link
          * aliases of the ROM, RAM, floppy, SCSI image or ROM dump. */
@@ -320,10 +337,9 @@ int     main(int argc, char *argv[])
                 rom_filename, ram_filename, rom_dump_filename,
                 disc_filename, scsi_filename
         };
-        const char *conflicting_path = NULL;
-        int conflict = reject_pram_aliases(pram_path, protected_paths,
-                                           sizeof(protected_paths) / sizeof(protected_paths[0]),
-                                           &conflicting_path);
+        conflict = find_path_alias(pram_path, protected_paths,
+                                   sizeof(protected_paths) / sizeof(protected_paths[0]),
+                                   &conflicting_path);
         if (conflict != 0) {
                 if (conflict > 0)
                         fprintf(stderr, "RTC/PRAM path '%s' conflicts with media/output path '%s'\n",
@@ -343,9 +359,9 @@ int     main(int argc, char *argv[])
                 return 1;
         }
         snprintf(pram_lock_path, lock_path_len, "%s.lock", pram_path);
-        conflict = reject_pram_aliases(pram_lock_path, protected_paths,
-                                       sizeof(protected_paths) / sizeof(protected_paths[0]),
-                                       &conflicting_path);
+        conflict = find_path_alias(pram_lock_path, protected_paths,
+                                   sizeof(protected_paths) / sizeof(protected_paths[0]),
+                                   &conflicting_path);
         free(pram_lock_path);
         if (conflict != 0) {
                 if (conflict > 0)
@@ -370,7 +386,7 @@ int     main(int argc, char *argv[])
         // Load memories/discs
 
         printf("Opening ROM '%s'\n", rom_filename);
-        ofd = open(rom_filename, O_RDONLY);
+        ofd = open(rom_filename, O_RDONLY | O_NONBLOCK);
         if (ofd < 0) {
                 perror("ROM");
                 free(pram_path);
@@ -378,19 +394,44 @@ int     main(int argc, char *argv[])
         }
 
         struct stat sb;
-        fstat(ofd, &sb);
-        off_t _rom_size = sb.st_size;
-        rom_base = mmap(0, _rom_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, ofd, 0);
+        if (fstat(ofd, &sb) || !S_ISREG(sb.st_mode) || sb.st_size != ROM_SIZE) {
+                fprintf(stderr, "ROM '%s': expected a 128 KiB Macintosh Plus ROM\n", rom_filename);
+                close(ofd);
+                free(pram_path);
+                return 1;
+        }
+        rom_base = mmap(NULL, ROM_SIZE, PROT_READ, MAP_PRIVATE, ofd, 0);
+        close(ofd);
         if (rom_base == MAP_FAILED) {
-                printf("Can't mmap ROM!\n");
+                perror("ROM mmap");
                 free(pram_path);
                 return 1;
         }
-        if (rom_patch(rom_base)) {
-                printf("Failed to patch ROM\n");
+        if (!rom_is_plus_v3(rom_base)) {
+                fprintf(stderr, "ROM '%s': expected Macintosh Plus V3 with checksum %08" PRIx32 "\n",
+                        rom_filename, ROM_PLUS_V3_CHECKSUM);
+                munmap(rom_base, ROM_SIZE);
                 free(pram_path);
                 return 1;
         }
+        printf("Macintosh Plus V3 ROM, checksum %08" PRIx32 "\n", ROM_PLUS_V3_CHECKSUM);
+
+        floppy = disk_img_open(disc_filename);
+        if (!floppy) {
+                const char *message;
+                if (errno == EINVAL)
+                        message = "expected a raw or DiskCopy 4.2 Macintosh 800K image";
+                else if (errno == EBADMSG)
+                        message = "DiskCopy 4.2 checksum mismatch";
+                else
+                        message = strerror(errno);
+                fprintf(stderr, "Floppy '%s': %s\n", disc_filename ? disc_filename : "(empty drive)", message);
+                munmap(rom_base, ROM_SIZE);
+                free(pram_path);
+                return 1;
+        }
+        if (disc_filename)
+                printf("Floppy: '%s' (800K, write protected)\n", disc_filename);
 
         struct scsi_image scsi_image;
         struct scsi_disk scsi_disk;
@@ -398,8 +439,7 @@ int     main(int argc, char *argv[])
         if (scsi_filename) {
                 if (scsi_image_open(&scsi_image, scsi_filename, scsi_write)) {
                         fprintf(stderr, "SCSI image '%s': %s\n", scsi_filename, strerror(errno));
-                        free(pram_path);
-                        return 1;
+                        goto close_media;
                 }
                 if (same_file(scsi_image.fd, ram_filename) || same_file(scsi_image.fd, rom_filename) ||
                     same_file(scsi_image.fd, rom_dump_filename) || same_file(scsi_image.fd, disc_filename)) {
@@ -427,24 +467,18 @@ int     main(int argc, char *argv[])
         }
 
         if (rom_dump_filename) {
-                int rfd = open(rom_dump_filename, O_CREAT | O_TRUNC | O_RDWR, 0655);
+                int rfd = open(rom_dump_filename, O_CREAT | O_TRUNC | O_WRONLY, 0644);
                 if (rfd < 0) {
                         perror("ROM dump");
                         goto close_scsi;
                 }
-                ssize_t written = write(rfd, rom_base, _rom_size);
-                if (written < 0) {
-                        perror("ROM dump write");
-                        close(rfd);
+                ssize_t written = write(rfd, rom_base, ROM_SIZE);
+                close(rfd);
+                if (written != ROM_SIZE) {
+                        fprintf(stderr, "Could not write the complete ROM to '%s'\n", rom_dump_filename);
                         goto close_scsi;
                 }
-                if (written < _rom_size) {
-                        printf("*** WARNING: Short write to %s!\n",
-                               rom_dump_filename);
-                } else {
-                        printf("Dumped ROM to %s\n", rom_dump_filename);
-                }
-                close(rfd);
+                printf("Dumped ROM to %s\n", rom_dump_filename);
         }
 
         /* Set up RAM, shared file map: */
@@ -455,48 +489,16 @@ int     main(int argc, char *argv[])
         }
         if (ftruncate(ofd, RAM_SIZE)) {
                 perror("RAM ftruncate");
+                close(ofd);
                 goto close_scsi;
         }
         ram_base = mmap(0, RAM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ofd, 0);
+        close(ofd);
         if (ram_base == MAP_FAILED) {
                 perror("RAM mmap");
                 goto close_scsi;
         }
         printf("RAM mapped at %p\n", (void *)ram_base);
-
-        disc_descr_t discs[DISC_NUM_DRIVES] = {0};
-
-        if (disc_filename) {
-                printf("Opening disc '%s'\n", disc_filename);
-                // FIXME: >1 disc
-                ofd = open(disc_filename, opt_write ? O_RDWR : O_RDONLY);
-                if (ofd < 0) {
-                        perror("Disc");
-                        goto close_scsi;
-                }
-
-                fstat(ofd, &sb);
-                size_t disc_size = sb.st_size;
-
-                /* Discs are always _writable_ from the perspective of
-                 * the Mac, but by default data is a MAP_PRIVATE copy
-                 * and is not synchronised to the backing file.  If
-                 * opt_write, we use MAP_SHARED and open the file RW,
-                 * so writes persist to the disc image.
-                 */
-                disc_base = mmap(0, disc_size, PROT_READ | PROT_WRITE,
-                                 opt_write ? MAP_SHARED : MAP_PRIVATE,
-                                 ofd, 0);
-                if (disc_base == MAP_FAILED) {
-                        printf("Can't mmap disc!\n");
-                        goto close_scsi;
-                }
-                printf("Disc mapped at %p, size %ld\n", (void *)disc_base, disc_size);
-
-                discs[0].base = disc_base;
-                discs[0].read_only = 0;         /* See above */
-                discs[0].size = disc_size;
-        }
 
         ////////////////////////////////////////////////////////////////////////
         // SDL/UI init
@@ -504,45 +506,50 @@ int     main(int argc, char *argv[])
         SDL_Renderer *renderer;
         SDL_Texture *texture;
 
-        SDL_Init(SDL_INIT_VIDEO);
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+                fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
+                goto close_scsi;
+        }
         SDL_Window *window = SDL_CreateWindow(UMAC_MOUSE_FREE_TITLE,
                                               SDL_WINDOWPOS_UNDEFINED,
                                               SDL_WINDOWPOS_UNDEFINED,
-                                              DISP_WIDTH * DISP_SCALE,
-                                              DISP_HEIGHT * DISP_SCALE,
+                                              MAC_SCREEN_WIDTH * DISP_SCALE,
+                                              MAC_SCREEN_HEIGHT * DISP_SCALE,
                                               0);
         if (!window) {
-                perror("SDL window");
-                goto close_scsi;
+                fprintf(stderr, "SDL window creation failed: %s\n", SDL_GetError());
+                goto close_sdl;
         }
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
-        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+        renderer = SDL_CreateRenderer(window, -1, 0);
         if (!renderer) {
-                perror("SDL renderer");
-                goto close_scsi;
+                fprintf(stderr, "SDL renderer creation failed: %s\n", SDL_GetError());
+                goto close_sdl;
         }
 
         texture = SDL_CreateTexture(renderer,
                                     SDL_PIXELFORMAT_RGBA32,
                                     SDL_TEXTUREACCESS_STREAMING,
-                                    DISP_WIDTH,
-                                    DISP_HEIGHT);
+                                    MAC_SCREEN_WIDTH,
+                                    MAC_SCREEN_HEIGHT);
         if (!texture) {
-                perror("SDL texture");
-                goto close_scsi;
+                fprintf(stderr, "SDL texture creation failed: %s\n", SDL_GetError());
+                goto close_sdl;
         }
 
         ////////////////////////////////////////////////////////////////////////
         // Emulator init
 
-        umac_init(ram_base, rom_base, discs);
+        umac_init(ram_base, rom_base, floppy);
         umac_opt_disassemble(opt_disassemble);
+        if (opt_iwm_trace)
+                umac_iwm_trace(stderr);
         pram_state = umac_rtc_load(pram_path);
         if (pram_state < 0) {
                 fprintf(stderr, "Cannot load RTC/PRAM backing file '%s': %s\n",
                         pram_filename, strerror(errno));
-                goto close_scsi;
+                goto close_sdl;
         }
         if (pram_state == RTC_PRAM_MISSING)
                 printf("RTC/PRAM backing file '%s' will be created on clean exit\n",
@@ -551,7 +558,7 @@ int     main(int argc, char *argv[])
                 struct scsi_target target = scsi_disk_target(&scsi_disk, scsi_id);
                 if (!ncr5380_attach(&target)) {
                         fprintf(stderr, "Cannot attach SCSI target %d: invalid descriptor\n", scsi_id);
-                        goto close_scsi;
+                        goto close_sdl;
                 }
         }
 
@@ -560,10 +567,13 @@ int     main(int argc, char *argv[])
 
         int done = 0;
         int mouse_button = 0;
-        uint64_t last_vsync = 0;
-        uint64_t last_1hz = 0;
+        const uint64_t host_hz = SDL_GetPerformanceFrequency();
+        const uint64_t present_interval = host_hz / 60;
+        const uint64_t vbl_interval = host_hz * MAC_FRAME_TICKS / MAC_C8M_HZ;
+        uint64_t next_present = SDL_GetPerformanceCounter();
+        uint64_t next_vsync = next_present + vbl_interval;
+        uint64_t next_1hz = next_present + host_hz;
         do {
-                struct timeval tv_now;
                 SDL_Event event;
                 int mousex = 0;
                 int mousey = 0;
@@ -619,25 +629,26 @@ int     main(int argc, char *argv[])
 
                 done |= umac_loop();
 
-                gettimeofday(&tv_now, NULL);
-                uint64_t now_usec = (tv_now.tv_sec * 1000000) + tv_now.tv_usec;
-
-                /* Passage of time: */
-                if ((now_usec - last_vsync) >= 16667) {
+                uint64_t host_now = SDL_GetPerformanceCounter();
+                /* The desktop's key repeat and double-click timing follow VBL. */
+                if (host_now >= next_vsync) {
                         umac_vsync_event();
-                        last_vsync = now_usec;
+                        next_vsync = host_now + vbl_interval;
+                }
 
-                        /* Cheapo framerate limiting: */
+                if (host_now >= next_present) {
+                        next_present = host_now + present_interval;
                         copy_fb(framebuffer, ram_get_base() + umac_get_fb_offset());
                         SDL_UpdateTexture(texture, NULL, framebuffer,
-                                          DISP_WIDTH * sizeof (Uint32));
+                                          MAC_SCREEN_WIDTH * sizeof (Uint32));
                         /* Scales texture up to window size */
                         SDL_RenderCopy(renderer, texture, NULL, NULL);
                         SDL_RenderPresent(renderer);
                 }
-                if ((now_usec - last_1hz) >= 1000000) {
+                /* The ROM advances its clock by one second for each CA1 event. */
+                if (host_now >= next_1hz) {
                         umac_1hz_event();
-                        last_1hz = now_usec;
+                        next_1hz += host_hz;
                 }
         } while (!done);
 
@@ -649,6 +660,7 @@ int     main(int argc, char *argv[])
                 result = 0;
         }
 
+close_sdl:
         SDL_Quit();
 close_scsi:
         if (scsi_filename) {
@@ -660,6 +672,11 @@ close_scsi:
         }
         if (pram_lock_fd >= 0)
                 close(pram_lock_fd);
+close_media:
+        if (ram_base != MAP_FAILED)
+                munmap(ram_base, RAM_SIZE);
+        disk_img_close(floppy);
+        munmap(rom_base, ROM_SIZE);
         free(pram_path);
         return result;
 }

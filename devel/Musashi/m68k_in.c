@@ -2352,7 +2352,7 @@ M68KMAKE_OP(bcc, 32, ., .)
 M68KMAKE_OP(bchg, 32, r, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (DX & 0x1f);
+	uint mask = 1u << (DX & 0x1f);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst ^= mask;
@@ -2373,7 +2373,7 @@ M68KMAKE_OP(bchg, 8, r, .)
 M68KMAKE_OP(bchg, 32, s, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint mask = 1u << (OPER_I_8() & 0x1f);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst ^= mask;
@@ -2394,7 +2394,7 @@ M68KMAKE_OP(bchg, 8, s, .)
 M68KMAKE_OP(bclr, 32, r, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (DX & 0x1f);
+	uint mask = 1u << (DX & 0x1f);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst &= ~mask;
@@ -2415,7 +2415,7 @@ M68KMAKE_OP(bclr, 8, r, .)
 M68KMAKE_OP(bclr, 32, s, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint mask = 1u << (OPER_I_8() & 0x1f);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst &= ~mask;
@@ -3135,7 +3135,7 @@ M68KMAKE_OP(bra, 32, ., .)
 M68KMAKE_OP(bset, 32, r, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (DX & 0x1f);
+	uint mask = 1u << (DX & 0x1f);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst |= mask;
@@ -3156,7 +3156,7 @@ M68KMAKE_OP(bset, 8, r, .)
 M68KMAKE_OP(bset, 32, s, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint mask = 1u << (OPER_I_8() & 0x1f);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst |= mask;
@@ -3214,7 +3214,7 @@ M68KMAKE_OP(bsr, 32, ., .)
 
 M68KMAKE_OP(btst, 32, r, d)
 {
-	FLAG_Z = DY & (1 << (DX & 0x1f));
+	FLAG_Z = DY & (1u << (DX & 0x1f));
 }
 
 
@@ -3226,7 +3226,7 @@ M68KMAKE_OP(btst, 8, r, .)
 
 M68KMAKE_OP(btst, 32, s, d)
 {
-	FLAG_Z = DY & (1 << (OPER_I_8() & 0x1f));
+	FLAG_Z = DY & (1u << (OPER_I_8() & 0x1f));
 }
 
 

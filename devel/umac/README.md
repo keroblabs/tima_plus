@@ -1,89 +1,28 @@
 # Micro Mac (umac)
 
-v0.22 16 Dec 2024
+This Macintosh Plus emulator builds on MicroMac v0.22 and the Musashi MC68000
+interpreter. The desktop build uses the original Mac Plus V3 ROM, a 512 × 342
+monochrome display, 4 MiB of RAM by default, and a read-only internal 800K floppy.
+It also emulates the VIA timers and keyboard interface, SCC mouse input,
+RTC/PRAM, and the NCR 5380 SCSI controller with one optional hard disk.
 
-This is a minimalist Apple Macintosh 128K/512K emulator.  It uses the
-_Musashi_ 68K interpreter and lashes the absolute minimum in hardware
-emulation around it so as to boot and run basic apps.  It's been
-tested with System 2.0 up to System 7.5.5, and runs MacWrite, MacDraw, and
-Missile Command.  (For a Mac 128K, System 3.2 is the last OS that will
-run, but by configuring 2MB+, even System 7 will work.)
+An embedding application owns the RAM, original ROM and internal drive.
+Create the drive with `disk_img_open(path)` or pass a null path for an empty
+installed drive. Each `umac_loop()` advances about 5 ms of emulated time.
+Use `umac_ticks()` for the virtual C8M clock, `MAC_FRAME_TICKS` for vertical
+blanking, and the RTC's time source to schedule the one-second VIA event.
 
-You can write, draw, and unwind with an apocalyptic game.  Live well.
-
-![Desktop screenshot](doc/umac_sys32_desktop.png)
-
-This was written as one of the old "hey I wonder how hard it'd be to"
-exercises; bit of fun, but not intended as a replacement for existing
-emulators.  But, it might inspire others working on similar (better)
-projects, and as a basis to explore these early but innovative
-machines.
-
-This grew without a plan, just playing around with the Mac128K ROM: it
-turns out that there's _very_ little HW emulation required to get to
-an Unhappy Mac screen, or even an attempt to boot via FDD
-(disc-question-mark screen).  Then, you discover IWM is way painful to
-emulate, and spend 80% of the time working around that – almost all
-Mac emulators immediately patch the ROM to insert a paravirt block
-driver over the top of the IWM driver, circumventing the problem.
-That's what _MicroMac_ does, too.
-
-This emulates the following hardware:
-
-  * VIA A/B GPIO ports, and IRQs (1Hz and Vsync)
-  * VIA shift register for keyboard
-  * SCC DCD pin change interrupts, for mouse
-  * Paravirtualised floppy storage
-  * Macintosh Plus NCR 5380 initiator with one optional SCSI hard disk
-  * Defaults to 128K of RAM, but will run as a Mac 512K by building
-    with `MEMSIZE=512`.  Or, you could use 1024, 2048, or 4096 to make
-    a 1/2/4MB Mac Plus-like machine.  Straying off-piste a little, you
-    can also use unsupported values like 256, 208, 192KB; when this is
-    done, the ROM is patched to "probe" the correct memory size.
-  * Monochrome 512x342 framebuffer (as per Mac Plus).  This can be
-    reconfigured for different/higher resolutions, such as VGA.
-
-There's no emulation for:
-
-  * IWM/realistic floppy drives
-  * More than one floppy or SCSI hard disk, or runtime image-switching
-  * Sound (a lot of work for a beep)
-  * VIA timers (Space Invaders runs too fast, probably because of this)
-  * Serial/printer/Appletalk
-  * Framebuffer switching: the Mac supports double-buffering by moving
-    the base of screen memory via the VIA (ha), but I haven't seen
-    anything using it.  Easy to add.
-
-The emulator is structured so as to be easily embeddable in other
-projects.  You initialise it, and pass in UI events (such as
-keyboard/mouse), and read video from the framebuffer:
-
+```c
+umac_init(ram, rom, internal_floppy);
+umac_loop();
+/* Deliver these when due. */
+umac_vsync_event();
+umac_1hz_event();
+/* Deliver input transitions as they occur. */
+umac_kbd_event(mac_scancode, down);
+umac_mouse(delta_x, delta_y, button_state);
+/* Read the framebuffer at ram + umac_get_fb_offset(). */
 ```
-  umac_init(pointer_to_ram, pointer_to_patched_rom,
-            pointer_to_struct_describing_mmaped_disc_images);
-
-  while (happy) {
-    if (one_second_passed)
-      umac_1hz_event();
-
-    if (vsync_happened_60Hz_kthx) {
-      umac_vsync_event();
-
-      update_UI_video_from(pointer_to_ram + umac_get_fb_offset());
-    }
-
-    if (keyboard_event_happened)
-      umac_kbd_event(mac_scancode);
-
-    if (mouse_movement_happened)
-      umac_mouse(delta_x, delta_y, button_state);
-
-    umac_loop();
-  }
-```
-
-A simple SDL2-based frontend builds on Linux.
-
 
 # Prerequisites
 
@@ -93,22 +32,12 @@ To build on Linux, you'll need `SDL2` installed (packaged as
 The desktop build uses the sibling [Musashi checkout](../Musashi) at
 `../Musashi` instead of the original `external/Musashi` submodule.
 
-You'll then need some Mac artefacts.  Because we need to patch the ROM
-a little, we require specific versions.  Currently the only supported
-ROM is _Mac Plus V3 ROM_, checksum `4d1f8172`.
-
-(Note this makes this a _Mac 128Ke_, fancy!)
-
-Then, get a boot disk.  Any System up to 3.2 should work fine on a 128K (though
-I don't think I've tried 1.0).  I just tested a random German System 3.2 disc
-from WinWorld and it works fine.  You might want to use Mini vMac or
-Basilisk (i.e. a proper emulator) to prepare a disc image with some
-apps to run...  MacDraw!
-
-It doesn't have to be a specific size.  A 400K or 800K floppy image
-works.  Make sure it's a raw image; the first two bytes should be the
-chars 'LK'.  Some emulators append a header (which can be `dd`'d off).
-
+Supply a 128 KiB unmodified Macintosh Plus V3 ROM with checksum `4d1f8172`.
+For floppy boot, attach a bootable raw Macintosh 800K image (819,200 bytes)
+or a Macintosh 800K DiskCopy 4.2 image (838,484 bytes with sector tags).
+DiskCopy images are validated and their 12-byte sector tags are preserved.
+Raw images and tagless DiskCopy images use zero-filled tags. System 6.0.8
+System Tools is a verified boot image.
 
 # Build
 
@@ -133,23 +62,16 @@ lists the sources, include directories, and build flags explicitly.
 The Musashi opcode files are generated in the build directory, not in
 the sibling checkout.
 
-To customize the build, pass `-DMEMSIZE=<size_in_KiB>`,
-`-DDISP_WIDTH=<xres>`, or `-DDISP_HEIGHT=<yres>` to the configure command.
-Use `-DCMAKE_BUILD_TYPE=Debug` to enable debug logging.
+Set `-DMEMSIZE=<size_in_KiB>` at configure time to choose the amount of RAM.
+The guest display uses the Mac Plus ROM's native 512 × 342 resolution.
 
 ## Make
 
-```
+```sh
 make
 ```
 
-No surprises here.  No autoconf either.  :D To the `make` command you
-can add:
-
-  * `DEBUG=1` to compile in debug spew,
-  * `MEMSIZE=<size_in_KB>` to control the amount of memory,
-  * `DISP_WIDTH=<xres>` and/or `DISP_HEIGHT=<yres>` to control the
-    video framebuffer resolution.
+Set `DEBUG=1` for instruction tracing or `MEMSIZE=<size_in_KiB>` to choose the RAM size.
 
 This builds the SDL2 executable `main`.  `make prepare` generates
 `m68kops.c` and `m68kops.h` from templates in the sibling Musashi
@@ -169,26 +91,20 @@ frequently-used 68K opcodes.  This was generated by profiling a System
 1967 opcodes, these hottest 200 opcodes represent 98% of the dynamic
 execution.  (See _RISC_.)
 
-Note on altering screen res: The fact that we can change resolution at
-all is a testament to the well thought-out MacOS code, even System 3,
-which accommodates whichever resolution the ROM describes.  Some early
-apps (such as MacPaint) will assume a given geometry, but generally
-all is good, especially once you get to the System 6/System 7 era.
-For `umac`, the practical maximum resolution is roughly 800x600; the
-framebuffer is limited to 64KB total (i.e. `x*y/8 < 65536`).  The X
-resolution must also be a multiple of 32.  Consider the additional
-memory use; a Mac 128K is too small for any real increase.
-
-
 # Running
 
 From the `umac` directory, run the CMake-built executable:
 
 ```
-./build-cmake/umac -r <path_to_MacPlusV3_rom> -d <path_to_disc_image>
+./build-cmake/umac -r rom.bin -d System608.image
 ```
 
 If you built with the Makefile, use `./main` instead.
+
+The SDL frontend runs the CPU as fast as the host allows. Floppy and VIA
+timer operations use the emulated C8M clock. Screen presentation, guest
+vertical blanking and the guest one-second clock interrupt use wall time
+to keep the display and input timing usable at desktop speeds.
 
 The host pointer is free at startup. Left-click the emulator window to
 capture it; that click is not sent to the Mac if capture succeeds.
@@ -201,20 +117,43 @@ screen memory (see `tools/mem2scr.c`).
 
 For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
 
-Finally, the `-W <file>` parameter writes out the ROM image after
-patches are applied.  This can be useful to prepare a ROM image for
-embedded builds, so as to avoid having to patch the ROM at runtime.
-That then means the ROM can be in immutable storage (e.g. flash),
-saving precious RAM space.
+Use `-W loaded.rom` to dump the loaded ROM bytes for comparison with the
+input file. `--trace-iwm` reports ROM PCs, virtual ticks, drive-control signals,
+and IWM status and GCR marks. An attached floppy is write protected. The
+former `-w` floppy-write option is rejected.
+
+### Floppy tests
+
+The `iwm_controller`, `iwm_disk_image`, `iwm_diskcopy_image` and
+`iwm_media_protection` CTest cases use generated inputs. They cover drive
+signals, serial timing, encoded sectors and tags, container validation, and
+media protection.
+
+To test original System Software boot, configure with your unmodified
+Mac Plus V3 ROM and a bootable raw or DiskCopy 4.2 800K floppy.
+
+```sh
+cmake -S . -B build-cmake \
+  -DUMAC_TEST_PLUS_ROM=/path/to/rom.bin \
+  -DUMAC_TEST_PLUS_FLOPPY=/path/to/System608.image
+cmake --build build-cmake --parallel
+ctest --test-dir build-cmake --output-on-failure
+```
+
+The ROM test checks Finder, display and keyboard/mouse input. The original
+`.Sony` driver reads sectors and tags on both heads and in all five speed
+zones, reports a write-protection error, and recalibrates during a reboot from
+cylinder 79. With 4 MiB of guest RAM and Python 3, the SDL boot test also checks
+startup time and the guest clock and VBL rates.
+To collect the MMIO trace, run `build-cmake/umac_iwm_rom_test ROM FLOPPY --trace`.
 
 ## SCSI hard disks
 
-The hard disk is separate from the patched floppy path (`-d`/`-w`).
-Without `-d`, the floppy drive is installed but empty.
+Without `-d`, the floppy drive is installed and empty. SCSI works with or without a floppy.
 Attach a raw, whole-device image read-only with `-s`:
 
 ```sh
-./build-cmake/umac -r rom.bin -d System70_boot.dsk -s HD10_512.hda
+./build-cmake/umac -r rom.bin -d System608.dsk -s HD10_512.hda
 ```
 
 The default is ID 1, LUN 0. Use `-t 0` through `-t 6` to override the
@@ -251,7 +190,7 @@ must be a raw classic HFS volume that fits that partition; Disk Copy
 headers, HFS+, and multiple-volume templates are not supported. No
 driver or System software is bundled. The script does not change either
 input, overwrite existing output, or install or bless a System Folder.
-Add `-d System70_boot.dsk` if you want to boot the floppy and mount the
+Add `-d System608.dsk` if you want to boot the floppy and mount the
 converted disk as a second volume.
 For other layouts, see [Disk Jockey](https://diskjockey.onegeekarmy.eu/).
 
@@ -267,8 +206,8 @@ Supported commands are TEST UNIT READY, REQUEST SENSE, INQUIRY,
 READ(6)/WRITE(6), READ(10)/WRITE(10) and MODE SENSE(6) for the current
 header/block descriptor (including the write-protect bit). Other commands
 return CHECK CONDITION.
-The controller supports polled REQ/ACK and CPU-driven pseudo-DMA without
-CPU interrupts or wait states. It has no target mode, contention,
+The controller supports polled REQ/ACK and CPU-driven pseudo-DMA. The
+Macintosh bus timing model applies when the CPU accesses its registers. It has no target mode, contention,
 disconnect/reselect, MESSAGE OUT, parity faults or external DMA/EOP.
 Byte reads use even addresses; writes use odd addresses. An aligned
 word accesses only the applicable lane (upper read, lower write); an
@@ -311,32 +250,11 @@ pitfalls/observations:
     functions that are selected when the overlay changes.  This has
     been implemented only for instruction/opcode fetch.
 
-  * IWM is a total pig to emulate, it turns out.  There's some kind of
-    servo loop controling the variable rotation speed via PWM (a DAC!),
-    and the driver/IWM vary it for a particular track until the syncs
-    look about right... too little fun for a Sunday.
-
-  * The disc device emulation is a cut-down version of Basilisk II's
-    disc emulation code: A custom 68K driver (in `macsrc/sonydrv.S`,
-    based on B2's driver code) is patched into the ROM, and makes
-    accesses to a magic `PV_SONY_ADDR` address.  These are then
-    trapped so that when the Mac OS makes a driver call
-    (e.g. `Open()`, `Prime()`, `Control()`, `Status()`) the call is
-    routed to host-side C code in `disc.c`.  The emulation code
-    doesn't support any of the advanced things a driver can be asked
-    to do, such as formatting – just read/write of a block.
-    The read/write can be performed internally, by passing a pointer
-    to an in-memory mapping of the disc data (e.g. `unix_main.c` just
-    `mmap()`s the disc); or, `op_read`/`op_write` callbacks can be
-    used for when a host disc op needs to be performed.
-    When the disc is asked to be ejected, a `umac` callback is called;
-    currently this just exits the emulator.  The beginnings of
-    multi-disc support are there, but not enabled – again, bare
-    minimum to get the thing to boot.
-
-  * The high-precision VIA timers aren't generally used by the OS,
-    only by sound (not supported) and the IWM driver (not used).
-    They're not emulated.
+  * The IWM receives Macintosh GCR bit cells from a circular track
+    generated by the disk backend. The backend is a logical 800K drive with
+    a variable-speed spindle and two heads. VIA PA5 selects Sony drive
+    registers and VIA Timers 1 and 2 support the ROM's drive delays and
+    tachometer polling. See [the IWM architecture](../../docs/04-iwm-emulation.md).
 
   * The OS's keyboard ISR is easy to confuse by sending bytes too fast,
     because a fast response's IRQ will race with the ISR exit path and
@@ -367,14 +285,6 @@ pitfalls/observations:
     extra goodies?) than the original 64K Mac 128K ROM.  It does,
     however, have some bug fixes.  Anyway: the MacPlus ROM runs on
     512K and 128K Macs, and was used as the 'e' in the Mac 512Ke.
-
-  * A benefit of the MacPlus ROM disassembly is that it helped to
-    reverse-engineer the ROM code relating to video, enabling changing
-    screen resolution.  See `rom.c` for a slew of patches to various
-    constants/code; some of it supplies X/Y res to the OS (along with
-    screen base), but most of the patches alter the ROM's own drawing
-    of the cursor, happy/sad Mac, and disc icons.
-
 
 # See also
 
