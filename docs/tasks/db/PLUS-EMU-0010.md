@@ -112,6 +112,7 @@ All reference inputs retained their hashes. Writes and formats used disposable c
 - **2026-11-20 — ROM investigation and rework, stages E–F:** Original-ROM tests initially wrote and read sectors successfully but exposed an automatic Finder write to HFS block 2 before the probes. Compared the explicit writes against the checkpointed post-boot fixture. The first format validator failed the original 27-byte template. After correcting the shared sync byte, the authentic oversized gap reached ROM retry. The subsequent full format exposed the partial-final-byte bug at cylinder 2. Corrected both issues and verified `EMU10-R1` through ROM format/verify, reopen and all-track native tests.
 - **2026-11-20 — Data-only investigation:** Reproduced `EMU10-R2` with raw System Tools and System 6.0.8 startup. The approved policy rejects the unrepresentable checkpoint and preserves the dirty track and original file. Verified data-only `.Sony` writes and formats after a protected startup fixture, and verified recovery after the guest deliberately wrote a nonzero tag and then zeroed it. Requested the owner's scope decision for ordinary Finder writes carrying tags on raw disks.
 - **2026-11-20 — Regression verification and developer review, stage G:** Reviewed validation, drive transitions, persistence error paths, and the ROM and frontend traces. Recorded the acceptance results above for release, debug, sanitizer, Make, HFS and dual-media tests. All required emulator checks passed within the approved data-only policy. Moved `IN_PROGRESS` → `REVIEW` for independent review and owner sign-off.
+- **2026-11-20 — Local commit and handoff:** Committed implementation, tests and evidence on `docs-iwm-transactional-write` at `4fffe227e85b557aecc4fb83f2f60cb981233732`. Recorded the implementation as `UNREVIEWED` and retained status `REVIEW` for the project owner's decision.
 
 **Proposed Change**
 
@@ -121,6 +122,7 @@ Implement the approved [Document 05](../../05-iwm-write-implementation.md) contr
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `docs-iwm-transactional-write` | `4fffe22` | `UNREVIEWED` | Implement and verify timed IWM writes, transactional track capture, image checkpoints and original-ROM formatting. |
 
 **Resolution Description**
 
