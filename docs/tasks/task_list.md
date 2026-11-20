@@ -30,7 +30,7 @@ No tickets formally opened under this category.
 
 ## Relationship to the roadmap
 
-Existing roadmap identifiers (`PLUS-DEV-0001`–`0010`, `PLUS-EMU-0001`–`0008`, `PLUS-SYS-0001`–`0007`) are **reserved programme/task identifiers**, not automatically opened tickets. Add each to this list with its own file only when formally raised. Do not create placeholder files.
+Existing roadmap identifiers (`PLUS-DEV-0001`–`0011`, `PLUS-EMU-0001`–`0008`, `PLUS-SYS-0001`–`0007`) are **reserved programme/task identifiers**, not automatically opened tickets. `PLUS-DEV-0011` was added on 20 November 2026 as the **next STM32 production firmware / Unicorn integration milestone**, separate from the now implemented virtual-IWM `PLUS-DEV-0004`. Add each to this list with its own file only when formally raised. Do not create placeholder files.
 
 `PLUS-EMU-0004` was the first opened record and covers the controller only. `PLUS-EMU-0005` covers a separate emulated SCSI hard-disk target and opaque BlueSCSI-compatible whole-device image. Both are **CLOSED** following approved engineering review, project-owner manual verification of a generated SCSI hard-drive image booting under uMac with floppy support, and the owner's mandatory final review and merge of [PR #1](https://github.com/keroblabs/tima_plus/pull/1) into `main` (`e568e6d`). `PLUS-SYS-0006` retains the Tima/Plus SCSI system driver, image preparation and boot work. Opening either ticket does **not** change the [floppy-first milestone order](../01-development-roadmap.md).
 
@@ -38,6 +38,8 @@ Existing roadmap identifiers (`PLUS-DEV-0001`–`0010`, `PLUS-EMU-0001`–`0008`
 
 [PR #3](https://github.com/keroblabs/tima_plus/pull/3), merged at [`b6ca242`](https://github.com/keroblabs/tima_plus/commit/b6ca242ae8efc5bc552b2491df7ad8ec0375f8a7), completed the read-only original-ROM IWM work: `PLUS-EMU-0003` is now **CLOSED** following the project-owner review, with Sony motor correction and expected Finder eject/restart behaviour confirmed. This does **not** close the separate write-phase ticket.
 
-**Dedicated Phase-2 developer plan:** [05-iwm-write-implementation.md](../05-iwm-write-implementation.md) provides the approved IWM write architecture and its acceptance tests. [PLUS-EMU-0010](db/PLUS-EMU-0010.md) records implementation progress and evidence.
+**Phase-1 uMac release boundary:** [Development Roadmap](../01-development-roadmap.md#phase-1-release-checkpoint--working-umac--original-macintosh-plus) records the implemented original-ROM Macintosh Plus reference on `pre-release-umac`; **PLUS-EMU-0010 remains `REVIEW`** pending owner manual IWM write acceptance and owner-controlled PR/merge, so this index does not mark it closed. The next planned work, when resumed, is `PLUS-DEV-0011`/reserved `PLUS-EMU-0007` STM32 firmware execution under Unicorn.
+
+**Dedicated IWM write developer plan:** [05-iwm-write-implementation.md](../05-iwm-write-implementation.md) provides the approved IWM write architecture and acceptance tests. [PLUS-EMU-0010](db/PLUS-EMU-0010.md) records implementation progress and evidence.
 
 **IWM/floppy phased work:** [PLUS-EMU-0003](db/PLUS-EMU-0003.md) establishes the unmodified-ROM, read-only IWM and encoded circular disk buffer **with write stubbed**; [PLUS-EMU-0010](db/PLUS-EMU-0010.md) later adds timed writes, dirty-track decode/flush and `.dsk` persistence. Both follow [04-iwm-emulation.md](../04-iwm-emulation.md). Implementation changes require **local `git commit`, not developer `git push`**, under the updated methodology.
