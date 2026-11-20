@@ -165,7 +165,7 @@ static void test_drive(struct disk_img *disk)
 {
         struct iwm iwm;
         uint64_t t = 0;
-        iwm_reset(&iwm, disk, t);
+        iwm_init(&iwm, disk, t);
         set_mode(&iwm, 0xff);
         iwm_read(&iwm, SW(MTRON), t);
         CHECK(sense(&iwm, 1, t) == 0x3f);
@@ -247,7 +247,7 @@ static void test_drive(struct disk_img *disk)
         CHECK(iwm_enabled(&iwm));
         CHECK(iwm_read(&iwm, SW(Q6H), t + (1u << 23) - 1) == 0x3b);
         CHECK(iwm_read(&iwm, SW(Q6H), t += 1u << 23) == 0x9b);
-        iwm_reset(&iwm, disk, t);
+        iwm_reset(&iwm, t);
         set_mode(&iwm, 0x1f);
         iwm_read(&iwm, SW(MTRON), t);
         CHECK(sense(&iwm, 6, t) == 0xbf && sense(&iwm, 1, t) == 0x3f);
@@ -255,10 +255,188 @@ static void test_drive(struct disk_img *disk)
         CHECK(sense(&iwm, 1, t) == 0xbf && sense(&iwm, 14, t) == 0x3f);
 }
 
+static const uint64_t motor_off_delay = UINT64_C(1) << 23;
+
+static void trace_motor(const char *event, const struct iwm *iwm)
+{
+        struct disk_img_status status = disk_img_status(iwm->internal);
+        bool external = (iwm->switches & IWM_EXTERNAL) != 0;
+        uint8_t enables = iwm_drive_enables(iwm);
+        printf("%s t=%" PRIu64 " motor=%u mode=%02x off_at=%" PRIu64
+               " drive=%u enbl=%u/%u spindle=%u ready_n=%u tach=%u trk=%u side=%u media=%u bit=%u\n",
+               event, iwm->ticks, !!(iwm->switches & IWM_MOTOR), iwm->mode, iwm->motor_off_at,
+               external, !(enables & IWM_ENBL1), !(enables & IWM_ENBL2), status.spindle,
+               disk_img_sense(iwm->internal, 13), disk_img_sense(iwm->internal, 7),
+               status.cylinder, status.side, !disk_img_sense(iwm->internal, 1), status.bit_position);
+}
+
+static struct disk_img *start_motor_test(struct iwm *iwm, uint8_t mode)
+{
+        struct disk_img *disk = disk_img_open(image_path);
+        CHECK(disk);
+        iwm_init(iwm, disk, 0);
+        set_mode(iwm, mode);
+        iwm_read(iwm, SW(MTRON), 0);
+        command(iwm, 4, false, 0);
+        select_register(iwm, 8, 0);
+        CHECK(disk_img_status(disk).spindle);
+        return disk;
+}
+
+static void check_motor_stopped(struct disk_img *disk)
+{
+        struct disk_img_status status = disk_img_status(disk);
+        CHECK(!status.spindle && !status.ready_at);
+        CHECK(disk_img_sense(disk, 13) && !disk_img_sense(disk, 7));
+        CHECK(!disk_img_sense(disk, 1) && !disk_img_sense(disk, 3));
+}
+
+static void test_immediate_motor_off(void)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_motor_test(&iwm, 0x1f);
+        uint64_t rev = track_lengths[0] * DISK_IMG_BIT_TICKS;
+        uint64_t t = rev + (rev + 119) / 120;
+        uint64_t spin_up = disk_img_status(disk).ready_at;
+        CHECK((iwm_read(&iwm, SW(Q6L), t) & 0x80) && iwm.clear_at > t);
+        CHECK(disk_img_sense(disk, 7) && !disk_img_sense(disk, 13));
+        unsigned int bit = disk_img_status(disk).bit_position;
+        trace_motor("R6-T1 running", &iwm);
+        CHECK(iwm_read(&iwm, SW(MTROFF), t) == 0xff && iwm_drive_enables(&iwm) == 0);
+        trace_motor("R6-T1 stopped", &iwm);
+        check_motor_stopped(disk);
+        CHECK(!iwm.shift && !iwm.latch && !iwm.clear_at);
+
+        iwm_read(&iwm, SW(MTRON), t += rev);
+        CHECK(iwm_read(&iwm, SW(Q6L), t += rev) == 0);
+        CHECK(disk_img_status(disk).bit_position == bit);
+        CHECK(sense(&iwm, 4, t) == 0xbf && sense(&iwm, 13, t) == 0xbf);
+        trace_motor("R6-T1 reselected", &iwm);
+        command(&iwm, 4, false, t);
+        CHECK(disk_img_status(disk).ready_at == t + spin_up);
+        CHECK(sense(&iwm, 13, t + spin_up - 1) == 0xbf);
+        CHECK(sense(&iwm, 13, t + spin_up) == 0x3f);
+        disk_img_close(disk);
+}
+
+static void test_delayed_motor_off(bool jump)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_motor_test(&iwm, 0x1b);
+        uint64_t rev = track_lengths[0] * DISK_IMG_BIT_TICKS;
+        uint64_t deadline = rev + motor_off_delay;
+        iwm_read(&iwm, SW(MTROFF), rev);
+        CHECK(iwm.motor_off_at == deadline && iwm_drive_enables(&iwm) == IWM_ENBL1);
+        CHECK(disk_img_status(disk).spindle && !disk_img_sense(disk, 13));
+        trace_motor("R6-T2 pending", &iwm);
+        if (!jump) {
+                iwm_read(&iwm, SW(MTROFF), deadline - 1);
+                CHECK(iwm.motor_off_at == deadline && iwm_drive_enables(&iwm) == IWM_ENBL1);
+                CHECK(disk_img_status(disk).spindle && !disk_img_sense(disk, 13));
+                trace_motor("R6-T2 last enabled tick", &iwm);
+        }
+
+        iwm_advance(&iwm, deadline + (jump ? rev + 256 : 0));
+        trace_motor(jump ? "R6-T2 after jump" : "R6-T2 at deadline", &iwm);
+        CHECK(!iwm.motor_off_at && iwm_drive_enables(&iwm) == 0);
+        check_motor_stopped(disk);
+        CHECK(!iwm.shift && !iwm.latch && !iwm.clear_at);
+        CHECK(disk_img_status(disk).bit_position == (deadline % rev) / DISK_IMG_BIT_TICKS);
+        disk_img_close(disk);
+}
+
+static void test_motor_off_cancellation(void)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_motor_test(&iwm, 0x1b);
+        uint64_t rev = track_lengths[0] * DISK_IMG_BIT_TICKS;
+        uint64_t ready_at = disk_img_status(disk).ready_at;
+        uint64_t deadline = rev + motor_off_delay;
+        iwm_read(&iwm, SW(MTROFF), rev);
+        iwm_read(&iwm, SW(MTRON), deadline - 1);
+        uint64_t t = deadline + 256;
+        iwm_advance(&iwm, t);
+        CHECK(iwm_enabled(&iwm) && !iwm.motor_off_at);
+        struct disk_img_status status = disk_img_status(disk);
+        CHECK(status.spindle && status.ready_at == ready_at);
+        CHECK(status.bit_position == (t % rev) / DISK_IMG_BIT_TICKS);
+        trace_motor("R6-T3 canceled", &iwm);
+
+        iwm_read(&iwm, SW(MTROFF), t);
+        iwm_read(&iwm, SW(MTRON), t + motor_off_delay);
+        CHECK(iwm_enabled(&iwm) && !iwm.motor_off_at);
+        check_motor_stopped(disk);
+        trace_motor("R6-T3 re-enabled at deadline", &iwm);
+        disk_img_close(disk);
+}
+
+static void test_motor_drive_select(void)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_motor_test(&iwm, 0x1b);
+        uint64_t t = track_lengths[0] * DISK_IMG_BIT_TICKS;
+        iwm_read(&iwm, SW(MTROFF), t);
+        iwm_read(&iwm, SW(EXTERNAL), t);
+        CHECK(iwm_drive_enables(&iwm) == IWM_ENBL2 && iwm.motor_off_at == t + motor_off_delay);
+        trace_motor("R6-T4 external selected", &iwm);
+        check_motor_stopped(disk);
+        command(&iwm, 4, false, t);
+        command(&iwm, 2, false, t);
+        command(&iwm, 6, true, t);
+        CHECK(sense(&iwm, 14, t) == 0xbb);
+        CHECK(!disk_img_status(disk).step_done_at);
+        check_motor_stopped(disk);
+
+        iwm_read(&iwm, SW(INTERNAL), t);
+        CHECK(iwm_drive_enables(&iwm) == IWM_ENBL1);
+        CHECK(sense(&iwm, 4, t) == 0xbb && sense(&iwm, 1, t) == 0x3b);
+        trace_motor("R6-T4 internal reselected", &iwm);
+        disk_img_close(disk);
+}
+
+static void test_motor_reset(void)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_motor_test(&iwm, 0x1f);
+        uint64_t t = disk_img_status(disk).ready_at;
+        command(&iwm, 2, false, t);
+        uint64_t done = disk_img_status(disk).step_done_at;
+        iwm_read(&iwm, SW(MTRON), done - 1);
+        iwm_read(&iwm, SW(INTERNAL), done - 1);
+        CHECK(disk_img_status(disk).spindle && disk_img_status(disk).step_done_at == done);
+        iwm_advance(&iwm, done);
+        CHECK(disk_img_status(disk).cylinder == 1);
+
+        command(&iwm, 2, false, done);
+        select_register(&iwm, 9, done);
+        t = disk_img_status(disk).step_done_at - 1;
+        iwm_advance(&iwm, t);
+        unsigned int bit = disk_img_status(disk).bit_position;
+        trace_motor("R6-T5 before reset", &iwm);
+        iwm_reset(&iwm, t);
+        trace_motor("R6-T5 after reset", &iwm);
+        CHECK(!iwm_enabled(&iwm));
+        check_motor_stopped(disk);
+        iwm_reset(&iwm, t);
+        iwm_advance(&iwm, ++t);
+        struct disk_img_status status = disk_img_status(disk);
+        CHECK(status.cylinder == 1 && status.side == 1);
+        CHECK(status.bit_position == bit && !status.step_done_at);
+
+        set_mode(&iwm, 0x1f);
+        iwm_read(&iwm, SW(MTRON), t);
+        command(&iwm, 2, false, t);
+        done = disk_img_status(disk).step_done_at;
+        iwm_read(&iwm, SW(MTROFF), done);
+        CHECK(disk_img_status(disk).cylinder == 2 && !disk_img_status(disk).step_done_at);
+        verify_image();
+        disk_img_close(disk);
+}
+
 static void test_latch(struct disk_img *disk)
 {
         struct iwm iwm;
-        iwm_reset(&iwm, disk, 0);
+        iwm_init(&iwm, disk, 0);
         set_mode(&iwm, 0x1f);
         iwm_read(&iwm, SW(MTRON), 0);
         command(&iwm, 4, false, 0);
@@ -392,6 +570,7 @@ static void verify_track(const struct disk_img_span *span, unsigned int track, u
 
 static void test_encoded_disk(struct disk_img *disk, bool tagged)
 {
+        disk_img_set_enabled(disk, true, 0);
         disk_img_command(disk, 4, false);
         uint64_t t = disk_img_status(disk).ready_at;
         disk_img_advance(disk, t, false);
@@ -532,6 +711,15 @@ int main(int argc, char **argv)
                 return 0;
         }
         make_image();
+        if (!strcmp(argv[1], "motor")) {
+                test_immediate_motor_off();
+                test_delayed_motor_off(false);
+                test_delayed_motor_off(true);
+                test_motor_off_cancellation();
+                test_motor_drive_select();
+                test_motor_reset();
+                return 0;
+        }
         struct disk_img *disk = disk_img_open(image_path);
         CHECK(disk);
         if (!strcmp(argv[1], "controller")) {

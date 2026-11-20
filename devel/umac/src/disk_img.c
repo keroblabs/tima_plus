@@ -43,6 +43,7 @@ struct disk_img {
         const uint8_t *data;
         const uint8_t *tags;
         bool inserted;
+        bool enabled;
         struct track tracks[2];
         struct disk_img_status status;
         unsigned int target;
@@ -351,6 +352,21 @@ struct disk_img_span disk_img_advance(struct disk_img *disk, uint64_t ticks, boo
         return span;
 }
 
+void disk_img_set_enabled(struct disk_img *disk, bool enabled, uint64_t ticks)
+{
+        if (!disk || disk->enabled == enabled)
+                return;
+
+        /* Finish any step due by the transition and preserve rotational phase. */
+        disk_img_advance(disk, ticks, false);
+        disk->enabled = enabled;
+        if (!enabled) {
+                disk->status.spindle = false;
+                disk->status.ready_at = 0;
+                disk->status.step_done_at = 0;
+        }
+}
+
 void disk_img_select_head(struct disk_img *disk, unsigned int side)
 {
         disk->status.side = side & 1;
@@ -358,6 +374,9 @@ void disk_img_select_head(struct disk_img *disk, unsigned int side)
 
 void disk_img_command(struct disk_img *disk, unsigned int reg, bool value)
 {
+        if (!disk->enabled)
+                return;
+
         struct disk_img_status *status = &disk->status;
         switch (reg) {
         case 0: /* DIRTN */

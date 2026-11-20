@@ -78,6 +78,7 @@ if(BUILD_TESTING)
     target_compile_options(umac_iwm_test PRIVATE -Wall -Wextra -pedantic)
     target_link_libraries(umac_iwm_test PRIVATE umac_core)
     add_test(NAME iwm_controller COMMAND umac_iwm_test controller)
+    add_test(NAME iwm_motor_enable COMMAND umac_iwm_test motor)
     add_test(NAME iwm_disk_image COMMAND umac_iwm_test disk)
     add_test(NAME iwm_diskcopy_image COMMAND umac_iwm_test diskcopy)
     add_test(NAME iwm_media_protection

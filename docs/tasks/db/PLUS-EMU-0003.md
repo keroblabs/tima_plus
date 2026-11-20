@@ -121,7 +121,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 | `EMU3-R3` | `CORRECTION_REQUIRED` | UBSan stopped the original System Software boot in Musashi's 32-bit `BCLR` when a signed mask shifted into bit 31. | Use unsigned masks for the 32-bit register bit operations. Repeat the boot and regression suite under ASan and UBSan. | `VERIFIED` |
 | `EMU3-R4` | `CORRECTION_REQUIRED` | The SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Verify comparable startup throughput, host presentation and guest clock rates, original-ROM IWM boot, SCSI, RTC/PRAM and input. | `VERIFIED` |
 | `EMU3-R5` | `CORRECTION_REQUIRED` | The SDL loader rejected `devel/umac/plus-system.image` because the disk backend required exactly 819,200 bytes. The reported 838,484-byte file has a DiskCopy 4.2 header, 1,600 data sectors and 1,600 sector tags. | Load the image directly, preserve all tags through GCR encoding, reject malformed containers, and test raw and tagged original-ROM boot and media protection. | `VERIFIED` |
-| `EMU3-R6` | `CORRECTION_REQUIRED` | `iwm.c` computes /ENBLx from Motor-On, Drive-Sel and `motor_off_at`, but never notifies `disk_img.c` when the internal drive loses effective enable. Thus Sony `status.spindle` can remain running behind inactive /ENBL and report motor-on at next selection, contrary to original-ROM `Sony_DiskSelect`. | Propagate effective per-drive enable transitions, at their exact virtual ticks, into the Sony drive model. Stop spindle/readiness/TACH on real enable loss but retain medium and cylinder. Handle timer expiry/cancel, drive switch, reset and regressions (see R6 section). | `CHANGES_REQUESTED` |
+| `EMU3-R6` | `CORRECTION_REQUIRED` | Before the correction, inactive /ENBL left the Sony spindle running and the next selection reported motor-on. The generated fixture reproduced the active TACH and ready state with both enables inactive. | Propagate effective per-drive enable transitions at their exact C8M ticks. Verify immediate and delayed motor-off, cancellation, drive selection, reset and original-ROM boot. | `VERIFIED` |
 
 ### EMU3-R6 — Motor-enable correction: developer handoff
 
@@ -153,6 +153,44 @@ Record timestamped trace with IWM Motor-On, mode, Motor-Off deadline, Drive-Sel,
 
 **Not part of this correction:** implementing media insertion UI, hot swapping, actuator timing or new eject mechanics. Losing /ENBLx must **never** eject the inserted medium.
 
+#### EMU3-R6 verification
+
+- `R6-T1` through `R6-T5` passed in `iwm_motor_enable`. The pre-fix library failed `R6-T1` at tick 1,202,870 with both /ENBL pins inactive, the spindle turning, /READY asserted and TACH high. After the fix the spindle and TACH stop at disable, a pending clear and the read latch are reset, and a new Sony start requires a fresh spin-up. At an enable cutoff the drive applies any step already due and cancels a step whose deadline is still ahead.
+- `R6-T6` passed 13/13 CTests on 4 MiB Release with each of the raw and tagged 800K images. The unmodified V3 ROM reached Finder, matched 11 sectors and tags, returned `wPrErr` and recalibrated on reboot from cylinder 79. The reset checks confirmed the mounted disk, side and cylinder survived power-down. Both Release SDL tests reached Finder within 0.41 s and measured 60.0 Hz guest `TickCount` and two guest seconds in 2.10 wall seconds. The 4 MiB Debug SDL build also reached Finder in 0.791 s with SCSI alone and 0.768 s with SCSI and the tagged floppy attached. The ROM and all three image file hashes matched their inputs.
+- The standard Debug suite passed 10/10 CTests. The 4 MiB Debug tagged suite under ASan/UBSan passed 13/13 with leak detection disabled in the sandbox. The standalone Make build linked and all four HFS converter tests passed.
+
+The deterministic trace records C8M ticks and active-low pin levels. In `R6-T2` the exact deadline and the overshooting advance stop at the same rotational position.
+
+```text
+R6-T1 running t=1202870 motor=1 mode=1f off_at=0 drive=0 enbl=0/1 spindle=1 ready_n=0 tach=1 trk=0 side=0 media=1 bit=621
+R6-T1 stopped t=1202870 motor=0 mode=1f off_at=0 drive=0 enbl=1/1 spindle=0 ready_n=1 tach=0 trk=0 side=0 media=1 bit=621
+R6-T2 last enabled tick t=9581535 motor=0 mode=1b off_at=9581536 drive=0 enbl=0/1 spindle=1 ready_n=0 tach=1 trk=0 side=0 media=1 bit=2381
+R6-T2 at deadline t=9581536 motor=0 mode=1b off_at=0 drive=0 enbl=1/1 spindle=0 ready_n=1 tach=0 trk=0 side=0 media=1 bit=2382
+R6-T2 after jump t=10774720 motor=0 mode=1b off_at=0 drive=0 enbl=1/1 spindle=0 ready_n=1 tach=0 trk=0 side=0 media=1 bit=2382
+R6-T3 canceled t=9581792 motor=1 mode=1b off_at=0 drive=0 enbl=0/1 spindle=1 ready_n=0 tach=1 trk=0 side=0 media=1 bit=2398
+R6-T4 external selected t=1192928 motor=0 mode=1b off_at=9581536 drive=1 enbl=1/0 spindle=0 ready_n=1 tach=0 trk=0 side=0 media=1 bit=0
+R6-T5 before reset t=987031 motor=1 mode=1f off_at=0 drive=0 enbl=0/1 spindle=1 ready_n=1 tach=1 trk=1 side=1 media=1 bit=61689
+R6-T5 after reset t=987031 motor=0 mode=00 off_at=0 drive=0 enbl=1/1 spindle=0 ready_n=1 tach=0 trk=1 side=1 media=1 bit=61689
+```
+
+Executed test commands for the Debug, tagged Release, raw Release and sanitizer builds. The tagged and sanitizer builds used `devel/umac/plus-system.image` and the original `devel/umac/rom.bin`.
+
+```sh
+cmake --build build --parallel 2
+ctest --test-dir build --output-on-failure
+cmake --build /tmp/tima-plus-iwm --parallel 3
+ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
+ctest --test-dir /tmp/tima-plus-iwm --verbose -R '^iwm_motor_enable$'
+/tmp/tima-plus-iwm/umac_iwm_rom_test devel/umac/rom.bin devel/umac/plus-system.image --trace
+cmake -S devel/umac -B /tmp/tima-plus-r6.skxZ1r/raw -G Ninja -DCMAKE_BUILD_TYPE=Release -DMEMSIZE=4096 \
+  -DUMAC_TEST_PLUS_ROM="$PWD/devel/umac/rom.bin" -DUMAC_TEST_PLUS_FLOPPY=/tmp/tima-plus-system608.dsk
+cmake --build /tmp/tima-plus-r6.skxZ1r/raw --parallel 3
+ctest --test-dir /tmp/tima-plus-r6.skxZ1r/raw --output-on-failure
+ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 cmake --build /tmp/tima-plus-iwm-sanitize --parallel 2
+ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir /tmp/tima-plus-iwm-sanitize --output-on-failure
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s devel/umac/tests -p 'test_hfs_to_device.py'
+```
+
 **Notes**
 
 - **2026-11-19 — Decision and registration:** Project owner approved splitting the authentic IWM + disk implementation into two components and two phases. This ticket covers Phase 1 read-only, **including disabling ROM patching**, with writing explicitly stubbed. The follow-on write ticket is `PLUS-EMU-0010` because `PLUS-EMU-0009` is already reserved/closed for RTC and PRAM. No code changes or tests were performed when this ticket was opened.
@@ -177,6 +215,8 @@ Record timestamped trace with IWM Motor-On, mode, Motor-Off deadline, Drive-Sel,
 - **2026-11-20 — Status Change:** Recorded both corrections in local commit `eb4322d3936afb16334d29ac04f023bd82b98ced`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 
 - **2026-11-20 — Code Review / Changes Requested / Status Change:** Reviewed `db1d257b5bc8f861e2fae176003253667f88d89f` after developer and owner boot/SCSI/RTC checks. New `EMU3-R6`: effective /ENBLx loss does not stop Sony spindle. Owner approved the bounded correction, returning `REVIEW` → `IN_PROGRESS`. Added exact timing, reset, drive-switch and original-ROM regression acceptance. Eject/insertion is separately documented in 04 for later STM32 design, not added to Phase-1 code. No code changes or new tests in this documentation commit.
+- **2026-11-20 — Rework:** Reproduced the stale spindle with the generated fixture linked to the pre-fix core at `b65729c`. The IWM now compares effective enable outputs when applying switches, expiring the off-delay or resetting. The disk backend advances to the transition tick and cancels any step still pending when enable is lost. Controller initialization is separate from live reset so reset can process a pending timer before clearing IWM state.
+- **2026-11-20 — Verification:** Added `iwm_motor_enable` and reset assertions in the original-ROM test. Recorded the deterministic trace, test commands and raw/tagged boot and regression results above. Marked `EMU3-R6` `VERIFIED`.
 
 **Proposed Change**
 

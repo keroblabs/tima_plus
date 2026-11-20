@@ -17,6 +17,12 @@ enum {
         IWM_Q7 = 1 << 7,
 };
 
+/* Asserted pins, represented as set bits despite their active-low polarity. */
+enum {
+        IWM_ENBL1 = 1 << 0,
+        IWM_ENBL2 = 1 << 1,
+};
+
 struct iwm {
         struct disk_img *internal;
         uint64_t ticks;
@@ -30,13 +36,16 @@ struct iwm {
         bool warned_write;
 };
 
-void iwm_reset(struct iwm *iwm, struct disk_img *internal, uint64_t ticks);
+/* Initialize with a newly opened drive, or NULL for an absent drive. */
+void iwm_init(struct iwm *iwm, struct disk_img *internal, uint64_t ticks);
+void iwm_reset(struct iwm *iwm, uint64_t ticks);
 void iwm_advance(struct iwm *iwm, uint64_t ticks);
 void iwm_set_sel(struct iwm *iwm, bool sel, uint64_t ticks);
 uint8_t iwm_read(struct iwm *iwm, unsigned int address, uint64_t ticks);
 void iwm_write(struct iwm *iwm, unsigned int address, uint8_t data, uint64_t ticks);
 
 bool iwm_enabled(const struct iwm *iwm);
+uint8_t iwm_drive_enables(const struct iwm *iwm);
 unsigned int iwm_drive_register(const struct iwm *iwm);
 
 #endif

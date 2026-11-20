@@ -199,9 +199,14 @@ int main(int argc, char **argv)
         sony_set_tag_buffer(scratch, 0);
         puts(".Sony matched 11 sectors and their tags across both heads and all zones and returned wPrErr for a write");
 
-        CHECK(disk_img_status(disk).cylinder == 79);
+        struct disk_img_status before_reset = disk_img_status(disk);
+        CHECK(before_reset.cylinder == 79);
         ram[CUR_AP_NAME] = 0;
         umac_reset();
+        struct disk_img_status after_reset = disk_img_status(disk);
+        CHECK(after_reset.cylinder == 79 && after_reset.side == before_reset.side);
+        CHECK(!after_reset.spindle && !after_reset.ready_at && !disk_img_sense(disk, 7));
+        CHECK(!disk_img_sense(disk, 1) && !disk_img_sense(disk, 3));
         boot_finder(); /* The original ROM must recalibrate from cylinder 79. */
         puts("Original ROM rebooted after seeking from cylinder 79");
 

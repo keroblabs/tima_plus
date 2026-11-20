@@ -139,19 +139,22 @@ static void trace_iwm(char op, unsigned int address, uint8_t value, uint8_t old,
                 last_trace_sense = sample;
 
         struct disk_img_status drive = disk_img_status(iwm.internal);
-        bool external = iwm.switches & IWM_EXTERNAL;
+        uint8_t enables = iwm_drive_enables(&iwm);
         uint64_t cpu_ticks = cpu_running ? machine_ticks + m68k_cycles_run() : machine_ticks;
         fprintf(iwm_trace_stream,
                 "IWM t=%" PRIu64 " cpu_t=%" PRIu64 " pc=%06x %c %06x=%02x q6=%u q7=%u ph=%x sel=%u"
-                " drive=%u enbl=%u/%u reg=%u cmd=%d ca2=%u mode=%02x dir=%u trk=%u side=%u"
-                " spindle=%u step=%" PRIu64 " ready=%" PRIu64 " tach=%u bit=%u latch=%02x\n",
+                " drive=%u enbl=%u/%u motor=%u off_at=%" PRIu64 " reg=%u cmd=%d ca2=%u mode=%02x"
+                " dir=%u trk=%u side=%u spindle=%u step=%" PRIu64 " ready=%" PRIu64
+                " ready_n=%u tach=%u media=%u bit=%u latch=%02x\n",
                 ticks, cpu_ticks, m68k_get_reg(NULL, M68K_REG_PPC), op, address, value,
                 !!(q & IWM_Q6), !!(q & IWM_Q7), iwm.switches & 15, iwm.sel,
-                external, !(iwm_enabled(&iwm) && !external), !(iwm_enabled(&iwm) && external), reg,
-                iwm_enabled(&iwm) && !external && !(old & IWM_STROBE) && (iwm.switches & IWM_STROBE)
+                !!(iwm.switches & IWM_EXTERNAL), !(enables & IWM_ENBL1), !(enables & IWM_ENBL2),
+                !!(iwm.switches & IWM_MOTOR), iwm.motor_off_at, reg,
+                (enables & IWM_ENBL1) && !(old & IWM_STROBE) && (iwm.switches & IWM_STROBE)
                         ? (int)(reg & 7) : -1,
                 !!(iwm.switches & IWM_PHASE2), iwm.mode, drive.step_out, drive.cylinder, drive.side,
-                drive.spindle, drive.step_done_at, drive.ready_at, disk_img_sense(iwm.internal, 7),
+                drive.spindle, drive.step_done_at, drive.ready_at, disk_img_sense(iwm.internal, 13),
+                disk_img_sense(iwm.internal, 7), !disk_img_sense(iwm.internal, 1),
                 drive.bit_position, iwm.latch);
 }
 
@@ -716,7 +719,7 @@ void    cpu_pulse_reset(void)
         ncr5380_reset();
         uint64_t ticks = cpu_running ? bus_ticks : machine_ticks;
         bool sel = iwm.sel;
-        iwm_reset(&iwm, iwm.internal, ticks);
+        iwm_reset(&iwm, ticks);
         iwm_set_sel(&iwm, sel, ticks);
 }
 
@@ -820,7 +823,7 @@ int     umac_init(void *ram_base, const void *rom_base, struct disk_img *interna
         sim_done = 0;
         overlay = 1;
         update_overlay_layout();
-        iwm_reset(&iwm, internal_floppy, machine_ticks);
+        iwm_init(&iwm, internal_floppy, machine_ticks);
 
         ncr5380_reset();
 	m68k_init();

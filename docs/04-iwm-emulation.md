@@ -500,7 +500,7 @@ The developer shall capture events (real ROM PCs and virtual ticks) covering at 
   Sony MOTORON=1 then IWM Motor-On=0: spindle off, /ENBLx off.
 ```
 
-Emit a compact trace of: **ROM PC, elapsed C8M clock, IWM address/soft-switch, Q6/Q7, PH0–PH3, VIA PA5, Drive-Sel, /ENBL1/2, Sony read/write register number and CA2 command value, direction, cylinder, side, spindle, step/ready deadlines, TACH, bit position and read-latch result**. Use this to diagnose unexpected commands and timeouts.
+The trace records the ROM PC, C8M tick, IWM access, Q6/Q7, PH0–PH3, VIA PA5, Drive-Sel, active-low /ENBL1/2 levels, Motor-On latch, and off-delay deadline. Its Sony fields include register and command, cylinder, side, spindle, step and spin-up deadlines, /READY, TACH, media presence, bit position and the read latch. Drive state fields describe the internal drive even when the external slot is selected.
 
 ### 12.8 Phase-1 implementation and acceptance tests
 
@@ -558,7 +558,7 @@ The **current Phase-1 disk backend immediately sets inserted=false when the ejec
 #### 12.10.3 Effective /ENBL transition is NOT media eject
 
 - The IWM Motor-On latch and Drive-Sel produce effective `/ENBL1` or `/ENBL2`; the IWM's off-delay mode can **keep enable asserted after a Motor-Off request**. Only an effective enable-falling edge powers down the selected Sony drive under this rule.
-- **On enable loss:** spindle and running TACH cease, RDDATA ceases and prior ready/spin-up eligibility is cleared. The media remains **inserted**; its image, tags, write-protection state, cylinder, head and track data remain valid. Do not emit a disk-removal signal.
+- **On enable loss:** stop the spindle, TACH and RDDATA and clear readiness. Preserve the inserted disk, tags, write protection, head, cylinder and rotational phase. In the virtual drive, apply any step already due at the disable tick and cancel a step whose deadline is still ahead.
 - **On re-enable:** the drive interface becomes addressable, with Sony spindle **off**. Do not automatically replay a previous motor-on command or claim ready without a new start/spin-up.
 - **On Drive-Sel change:** notify the old drive of its lost /ENBL and let it power down; the new drive has independent spindle/media state. Selection is not physical eject.
 - **At motor-off timeout:** deliver a disable event at the actual **virtual C8M deadline**, not at the earlier Motor-Off soft-switch request. Re-enabling before expiry cancels the event and preserves the active spindle.

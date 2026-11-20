@@ -21,9 +21,23 @@ bool iwm_enabled(const struct iwm *iwm)
         return (iwm->switches & IWM_MOTOR) || iwm->motor_off_at;
 }
 
+uint8_t iwm_drive_enables(const struct iwm *iwm)
+{
+        if (!iwm_enabled(iwm))
+                return 0;
+        return iwm->switches & IWM_EXTERNAL ? IWM_ENBL2 : IWM_ENBL1;
+}
+
 static struct disk_img *selected_drive(const struct iwm *iwm)
 {
-        return iwm_enabled(iwm) && !(iwm->switches & IWM_EXTERNAL) ? iwm->internal : NULL;
+        return iwm_drive_enables(iwm) & IWM_ENBL1 ? iwm->internal : NULL;
+}
+
+static void update_drive_enables(struct iwm *iwm, uint8_t old_enables)
+{
+        uint8_t enables = iwm_drive_enables(iwm);
+        if ((old_enables ^ enables) & IWM_ENBL1)
+                disk_img_set_enabled(iwm->internal, (enables & IWM_ENBL1) != 0, iwm->ticks);
 }
 
 unsigned int iwm_drive_register(const struct iwm *iwm)
@@ -88,8 +102,11 @@ void iwm_advance(struct iwm *iwm, uint64_t ticks)
                 return;
 
         if (iwm->motor_off_at && ticks >= iwm->motor_off_at) {
-                shift_bits(iwm, disk_img_advance(iwm->internal, iwm->motor_off_at, reading_track(iwm)));
+                uint8_t old_enables = iwm_drive_enables(iwm);
+                iwm->ticks = iwm->motor_off_at;
+                shift_bits(iwm, disk_img_advance(iwm->internal, iwm->ticks, reading_track(iwm)));
                 iwm->motor_off_at = 0;
+                update_drive_enables(iwm, old_enables);
                 rearm(iwm);
         }
         shift_bits(iwm, disk_img_advance(iwm->internal, ticks, reading_track(iwm)));
@@ -97,10 +114,18 @@ void iwm_advance(struct iwm *iwm, uint64_t ticks)
         iwm->ticks = ticks;
 }
 
-void iwm_reset(struct iwm *iwm, struct disk_img *internal, uint64_t ticks)
+void iwm_init(struct iwm *iwm, struct disk_img *internal, uint64_t ticks)
 {
         disk_img_advance(internal, ticks, false);
         *iwm = (struct iwm){ .internal = internal, .ticks = ticks };
+}
+
+void iwm_reset(struct iwm *iwm, uint64_t ticks)
+{
+        iwm_advance(iwm, ticks);
+        uint8_t old_enables = iwm_drive_enables(iwm);
+        iwm_init(iwm, iwm->internal, iwm->ticks);
+        update_drive_enables(iwm, old_enables);
 }
 
 static void update_head(struct iwm *iwm, bool was_reading, unsigned int old_reg)
@@ -132,6 +157,7 @@ static void apply_switch(struct iwm *iwm, unsigned int address, uint64_t ticks)
         if (next == old)
                 return;
 
+        uint8_t old_enables = iwm_drive_enables(iwm);
         bool was_reading = reading_track(iwm);
         unsigned int old_reg = iwm_drive_register(iwm);
         iwm->switches = next;
@@ -140,6 +166,7 @@ static void apply_switch(struct iwm *iwm, unsigned int address, uint64_t ticks)
                 if (!(next & IWM_MOTOR) && !(iwm->mode & MODE_TIMER_DISABLE))
                         iwm->motor_off_at = iwm->ticks + MOTOR_OFF_TICKS;
         }
+        update_drive_enables(iwm, old_enables);
 
         struct disk_img *disk = selected_drive(iwm);
         if (disk && bit == IWM_STROBE && (next & IWM_STROBE))
