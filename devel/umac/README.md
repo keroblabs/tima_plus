@@ -2,13 +2,15 @@
 
 This Macintosh Plus emulator builds on MicroMac v0.22 and the Musashi MC68000
 interpreter. The desktop build uses the original Mac Plus V3 ROM, a 512 × 342
-monochrome display, 4 MiB of RAM by default, and a read-only internal 800K floppy.
+monochrome display, 4 MiB of RAM by default, and an internal 800K floppy.
 It also emulates the VIA timers and keyboard interface, SCC mouse input,
 RTC/PRAM, and the NCR 5380 SCSI controller with one optional hard disk.
 
 An embedding application owns the RAM, original ROM and internal drive.
 Create the drive with `disk_img_open(path)` or pass a null path for an empty
-installed drive. Each `umac_loop()` advances about 5 ms of emulated time.
+installed drive. `disk_img_open_writable(path)` enables writes. If
+`disk_img_close()` returns `-1`, the caller still owns the drive and can retry
+saving its dirty tracks. Each `umac_loop()` advances about 5 ms of emulated time.
 Use `umac_ticks()` for the virtual C8M clock, `MAC_FRAME_TICKS` for vertical
 blanking, and the RTC's time source to schedule the one-second VIA event.
 
@@ -119,15 +121,29 @@ For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
 
 Use `-W loaded.rom` to dump the loaded ROM bytes for comparison with the
 input file. `--trace-iwm` reports ROM PCs, virtual ticks, drive-control signals,
-and IWM status and GCR marks. An attached floppy is write protected. The
-former `-w` floppy-write option is rejected.
+IWM status, and write and checkpoint outcomes.
+
+### Writable floppies
+
+Use `-d disk.image -w` to enable persistent floppy writes. `-d` alone mounts
+the floppy write protected. `-p` enables SCSI writes independently.
+
+Tagged DiskCopy 4.2 images preserve both the 512-byte data and the 12-byte tag
+of every sector. Raw `.dsk` and tagless `.image` files support data-only writes.
+System software can supply nonzero tags even for ordinary volume updates. A
+save requiring such tags fails on data-only media and retains the modified
+track in memory.
+
+The emulator saves dirty tracks when moving to another cylinder, ejecting, or
+closing the window. A failed save blocks the move, eject or close and reports
+the error. The `.iwm.lock` sidecar coordinates writable sessions across atomic
+replacements of the image file.
 
 ### Floppy tests
 
-The `iwm_controller`, `iwm_disk_image`, `iwm_diskcopy_image` and
-`iwm_media_protection` CTest cases use generated inputs. They cover drive
-signals, serial timing, encoded sectors and tags, container validation, and
-media protection.
+The native IWM tests use generated images. They cover drive signals, read and
+write timing, GCR encoding and decoding, format rollback, media protection,
+and checkpoint failure and retry.
 
 To test original System Software boot, configure with your unmodified
 Mac Plus V3 ROM and a bootable raw or DiskCopy 4.2 800K floppy.
@@ -146,6 +162,12 @@ zones, reports a write-protection error, and recalibrates during a reboot from
 cylinder 79. With 4 MiB of guest RAM and Python 3, the SDL boot test also checks
 startup time and the guest clock and VBL rates.
 To collect the MMIO trace, run `build-cmake/umac_iwm_rom_test ROM FLOPPY --trace`.
+
+`iwm_plus_rom_write` and `iwm_plus_rom_format` use disposable copies. They
+exercise `.Sony` writes, immediate read-back, seek-triggered persistence,
+format gap retry, full-disk verify and reopening. On Linux, the test build also
+exercises raw and tagless media with the fixture write-protected during system
+startup, then uses the normal writable drive state for the `.Sony` probes.
 
 ## SCSI hard disks
 

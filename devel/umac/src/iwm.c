@@ -96,6 +96,51 @@ static void shift_bits(struct iwm *iwm, struct disk_img_span span)
         }
 }
 
+static void stop_serializer(struct iwm *iwm)
+{
+        iwm->write_at = 0;
+        iwm->write_left = 0;
+        iwm->write_pending = false;
+        iwm->write_media = false;
+}
+
+static void check_write_media(struct iwm *iwm)
+{
+        if (iwm->write_media && !disk_img_writing(iwm->internal))
+                stop_serializer(iwm);
+}
+
+static void write_bits(struct iwm *iwm, uint64_t ticks)
+{
+        check_write_media(iwm);
+        while (iwm->write_at && iwm->write_at <= ticks) {
+                if (!iwm->write_left) {
+                        if (!iwm->write_pending) {
+                                iwm->write_underrun = true;
+                                disk_img_abort_write(iwm->internal);
+                                stop_serializer(iwm);
+                                return;
+                        }
+                        iwm->write_shift = iwm->write_hold;
+                        iwm->write_pending = false;
+                        iwm->write_left = 8;
+                }
+                if (iwm->write_media)
+                        disk_img_write_bit(iwm->internal, iwm->write_shift >> 7);
+                iwm->write_shift <<= 1;
+                --iwm->write_left;
+                iwm->write_at += DISK_IMG_BIT_TICKS;
+        }
+}
+
+static void advance_to(struct iwm *iwm, uint64_t ticks)
+{
+        if (iwm->write_at)
+                write_bits(iwm, ticks);
+        shift_bits(iwm, disk_img_advance(iwm->internal, ticks, reading_track(iwm)));
+        iwm->ticks = ticks;
+}
+
 void iwm_advance(struct iwm *iwm, uint64_t ticks)
 {
         if (ticks <= iwm->ticks)
@@ -103,15 +148,14 @@ void iwm_advance(struct iwm *iwm, uint64_t ticks)
 
         if (iwm->motor_off_at && ticks >= iwm->motor_off_at) {
                 uint8_t old_enables = iwm_drive_enables(iwm);
-                iwm->ticks = iwm->motor_off_at;
-                shift_bits(iwm, disk_img_advance(iwm->internal, iwm->ticks, reading_track(iwm)));
+                advance_to(iwm, iwm->motor_off_at);
                 iwm->motor_off_at = 0;
                 update_drive_enables(iwm, old_enables);
+                stop_serializer(iwm);
                 rearm(iwm);
         }
-        shift_bits(iwm, disk_img_advance(iwm->internal, ticks, reading_track(iwm)));
+        advance_to(iwm, ticks);
         clear_acknowledged_byte(iwm, ticks);
-        iwm->ticks = ticks;
 }
 
 void iwm_init(struct iwm *iwm, struct disk_img *internal, uint64_t ticks)
@@ -124,6 +168,7 @@ void iwm_reset(struct iwm *iwm, uint64_t ticks)
 {
         iwm_advance(iwm, ticks);
         uint8_t old_enables = iwm_drive_enables(iwm);
+        disk_img_abort_write(iwm->internal);
         iwm_init(iwm, iwm->internal, iwm->ticks);
         update_drive_enables(iwm, old_enables);
 }
@@ -134,6 +179,7 @@ static void update_head(struct iwm *iwm, bool was_reading, unsigned int old_reg)
         unsigned int reg = iwm_drive_register(iwm);
         if (disk && !(iwm->switches & IWM_STROBE) && (reg & ~1u) == 8)
                 disk_img_select_head(disk, reg & 1);
+        check_write_media(iwm);
         if (reading_track(iwm) != was_reading || (was_reading && reg != old_reg))
                 rearm(iwm);
 }
@@ -161,12 +207,21 @@ static void apply_switch(struct iwm *iwm, unsigned int address, uint64_t ticks)
         bool was_reading = reading_track(iwm);
         unsigned int old_reg = iwm_drive_register(iwm);
         iwm->switches = next;
+        if (bit == IWM_Q7 && !(next & IWM_Q7)) {
+                if (iwm->write_media)
+                        disk_img_finish_write(iwm->internal);
+                stop_serializer(iwm);
+                iwm->write_started = false;
+                iwm->write_underrun = false;
+        }
         if (bit == IWM_MOTOR) {
                 iwm->motor_off_at = 0;
                 if (!(next & IWM_MOTOR) && !(iwm->mode & MODE_TIMER_DISABLE))
                         iwm->motor_off_at = iwm->ticks + MOTOR_OFF_TICKS;
         }
         update_drive_enables(iwm, old_enables);
+        if (old_enables != iwm_drive_enables(iwm))
+                stop_serializer(iwm);
 
         struct disk_img *disk = selected_drive(iwm);
         if (disk && bit == IWM_STROBE && (next & IWM_STROBE))
@@ -189,7 +244,8 @@ uint8_t iwm_read(struct iwm *iwm, unsigned int address, uint64_t ticks)
                 return (sense ? 0x80 : 0) | (iwm_enabled(iwm) ? 0x20 : 0) | iwm->mode;
         }
         case IWM_Q7:
-                return 0x3f; /* Write stub: no buffer ready or successful transfer. */
+                return 0x3f | (iwm->write_started && !iwm->write_pending ? 0x80 : 0) |
+                       (iwm->write_media ? 0x40 : 0);
         default:
                 return 0xff;
         }
@@ -197,14 +253,30 @@ uint8_t iwm_read(struct iwm *iwm, unsigned int address, uint64_t ticks)
 
 void iwm_write(struct iwm *iwm, unsigned int address, uint8_t data, uint64_t ticks)
 {
+        uint8_t old_q = iwm->switches & (IWM_Q6 | IWM_Q7);
         apply_switch(iwm, address, ticks);
         if ((iwm->switches & (IWM_Q6 | IWM_Q7)) != (IWM_Q6 | IWM_Q7))
                 return;
         if (!iwm_enabled(iwm)) {
                 iwm->mode = data & 0x1f;
                 rearm(iwm);
-        } else if (!iwm->warned_write) {
-                fputs("IWM: rejected write to read-only floppy\n", stderr);
-                iwm->warned_write = true;
+                return;
+        }
+        if (old_q == IWM_Q6 && (iwm->mode & READ_MODE) == READ_MODE) {
+                iwm->write_started = true;
+                iwm->write_at = iwm->ticks + IWM_WRITE_START_TICKS;
+                struct disk_img *disk = selected_drive(iwm);
+                iwm->write_media = !(iwm->switches & IWM_STROBE) &&
+                                   (iwm_drive_register(iwm) & ~1u) == 8 &&
+                                   disk_img_begin_write(disk, iwm->write_at);
+                if (!iwm->write_media && !iwm->warned_write) {
+                        fputs("IWM: floppy write rejected (drive absent, protected or not ready)\n", stderr);
+                        iwm->warned_write = true;
+                }
+        }
+        if (iwm->write_at) {
+                /* A premature write replaces the pending byte. */
+                iwm->write_hold = data;
+                iwm->write_pending = true;
         }
 }

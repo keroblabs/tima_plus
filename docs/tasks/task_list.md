@@ -1,6 +1,6 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** SCSI, RTC and read-only IWM merged and closed; write-phase PLUS-EMU-0010 remains open, 20 November 2026.
+**Status:** SCSI, RTC and read-only IWM are closed. PLUS-EMU-0010 is in review as of 20 November 2026.
 
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
@@ -8,7 +8,7 @@
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current totals:** 5 registered / 1 OPEN / 0 IN_PROGRESS / 0 REVIEW / 0 RESOLVED / 4 CLOSED / 0 DEFERRED.
+**Current totals:** 5 registered / 0 OPEN / 0 IN_PROGRESS / 1 REVIEW / 0 RESOLVED / 4 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -22,7 +22,7 @@ No tickets formally opened under this category.
 | [`PLUS-EMU-0004`](db/PLUS-EMU-0004.md) | `BUG` | `CLOSED` | Implement Macintosh Plus NCR 5380 SCSI controller | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0004.md) |
 | [`PLUS-EMU-0005`](db/PLUS-EMU-0005.md) | `TASK` | `CLOSED` | Emulate a SCSI hard disk backed by a BlueSCSI-compatible image | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0005.md) |
 | [`PLUS-EMU-0009`](db/PLUS-EMU-0009.md) | `BUG` | `CLOSED` | Implement Macintosh Plus serial RTC and battery-backed PRAM | [PLUS-DEV-0002](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-EMU-0009.md) |
-| [`PLUS-EMU-0010`](db/PLUS-EMU-0010.md) | `TASK` | `OPEN` | Add IWM write handling and persistent virtual floppy writes | [PLUS-DEV-0004](../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) | [Details and history](db/PLUS-EMU-0010.md) |
+| [`PLUS-EMU-0010`](db/PLUS-EMU-0010.md) | `TASK` | `REVIEW` | Add IWM write handling and persistent virtual floppy writes | [PLUS-DEV-0004](../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) | [Details and history](db/PLUS-EMU-0010.md) |
 
 ## PLUS-SYS — Tima/Plus boot, storage, OS and desktop
 
@@ -38,6 +38,6 @@ Existing roadmap identifiers (`PLUS-DEV-0001`–`0010`, `PLUS-EMU-0001`–`0008`
 
 [PR #3](https://github.com/keroblabs/tima_plus/pull/3), merged at [`b6ca242`](https://github.com/keroblabs/tima_plus/commit/b6ca242ae8efc5bc552b2491df7ad8ec0375f8a7), completed the read-only original-ROM IWM work: `PLUS-EMU-0003` is now **CLOSED** following the project-owner review, with Sony motor correction and expected Finder eject/restart behaviour confirmed. This does **not** close the separate write-phase ticket.
 
-**Dedicated Phase-2 developer plan:** [05-iwm-write-implementation.md](../05-iwm-write-implementation.md) provides proposed IWM write handshake, circular bit update, inverse GCR/sector tags, DC42 persistence, ROM format and testing decisions. [PLUS-EMU-0010](db/PLUS-EMU-0010.md) is still `OPEN`, not completed by documentation.
+**Dedicated Phase-2 developer plan:** [05-iwm-write-implementation.md](../05-iwm-write-implementation.md) provides the approved IWM write architecture and its acceptance tests. [PLUS-EMU-0010](db/PLUS-EMU-0010.md) records implementation progress and evidence.
 
 **IWM/floppy phased work:** [PLUS-EMU-0003](db/PLUS-EMU-0003.md) establishes the unmodified-ROM, read-only IWM and encoded circular disk buffer **with write stubbed**; [PLUS-EMU-0010](db/PLUS-EMU-0010.md) later adds timed writes, dirty-track decode/flush and `.dsk` persistence. Both follow [04-iwm-emulation.md](../04-iwm-emulation.md). Implementation changes require **local `git commit`, not developer `git push`**, under the updated methodology.

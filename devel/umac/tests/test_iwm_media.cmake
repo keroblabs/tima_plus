@@ -25,9 +25,16 @@ function(expect_rejection diagnostic)
 endfunction()
 
 # The checks must run before startup even with invalid short fixtures.
-expect_rejection("read-only IWM" -w)
+execute_process(COMMAND "${UMAC}" -w WORKING_DIRECTORY "${TEST_DIR}"
+                RESULT_VARIABLE no_floppy ERROR_VARIABLE no_floppy_error)
+if(no_floppy EQUAL 0 OR NOT no_floppy_error MATCHES "-w requires a floppy image")
+    message(FATAL_ERROR "Expected -w to require a floppy: ${no_floppy_error}")
+endif()
 expect_rejection("conflicts with media/output" -W "${rom}")
 expect_rejection("conflicts with media/output" -W "${floppy}")
+expect_rejection("conflicts with media/output" -w -s "${floppy}")
+expect_rejection("conflicts with media/output" -w -P "${floppy}.iwm.lock")
+expect_rejection("conflicts with media/output" -w -W "${floppy}.iwm.lock")
 file(REMOVE "${ram}")
 file(CREATE_LINK "${floppy}" "${ram}")
 expect_rejection("conflicts with media/output")

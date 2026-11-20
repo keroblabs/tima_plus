@@ -1,10 +1,15 @@
 # Tima/Plus — Macintosh Plus IWM Write Implementation Plan
 
-**Status:** **Approved architecture and implementation handoff** — project-owner decision of 20 November 2026: transactional temporary circular-track capture. Controller timing and ROM integration still require validation; no write implementation or tests are claimed.  
-**Date:** 20 November 2026  
-**Ticket:** [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) — OPEN  
-**Completed prerequisite:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) — CLOSED, [PR #3](https://github.com/keroblabs/tima_plus/pull/3) merged  
-**Architecture:** [04 — IWM Emulation](04-iwm-emulation.md), especially §§3.2, 4.3, 6.2 and 12  
+**Status:** **Approved architecture and implementation handoff** — project-owner decision of 20 November 2026 for transactional temporary circular-track capture. The ticket records implementation and verification.
+
+**Date:** 20 November 2026
+
+**Ticket:** [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md)
+
+**Completed prerequisite:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) — CLOSED, [PR #3](https://github.com/keroblabs/tima_plus/pull/3) merged
+
+**Architecture:** [04 — IWM Emulation](04-iwm-emulation.md), especially §§3.2, 4.3, 6.2 and 12
+
 **Target:** Macintosh Plus V3 **unmodified ROM** and original `.Sony` driver; Sony double-sided **800K GCR**, not a complete IWM or SuperDrive
 
 ## 1. Scope and actual code baseline
@@ -90,7 +95,7 @@ The existing encoder `append_sector()` and `append_payload()` are the reference 
 
 | Field | Track representation |
 | --- | --- |
-| Address | `D5 AA 96`, then five **GCR codewords**: low track, sector, high track + side, format `$22`, XOR checksum, then `DE AA FF FF` |
+| Address | `D5 AA 96`, then five **GCR codewords** for low track, sector, high track + side, format `$22` and XOR checksum. The address ends with `DE AA`. The generated track has two `$FF` filler bytes. The ROM's format template uses one `$FF` filler and shares the next `$FF` with the leading byte of the data sync group. |
 | Sync before data | Packed `FF 3F CF F3 FC FF` (48 bits); other 10-bit gap sync may precede address |
 | Data | `D5 AA AD`, one GCR **sector number**, then **703 encoded GCR codewords** |
 | Data trailer | `DE AA FF FF` |
@@ -243,4 +248,4 @@ Use disposable copies of known-good tagged System media and blank/formatted fixt
 - [800K sector/track description](https://savagetaylor.com/til/TA45016.html) and [DiskCopy 4.2 image format](https://ciderpress2.com/formatdoc/DiskCopy-notes.html).
 - Accepted [`iwm.c`](../devel/umac/src/iwm.c), [`disk_img.c`](../devel/umac/src/disk_img.c), [`PLUS-EMU-0003`](tasks/db/PLUS-EMU-0003.md) and [Document 04](04-iwm-emulation.md).
 
-**Approval boundary:** The project owner accepted the **transactional circular-track architecture** on **20 November 2026**. Remaining timing/ROM details must still be demonstrated, and the write implementation remains **OPEN**, neither built nor verified by this documentation change. Implementation developers must stop after local `git commit`(s), report SHA and test evidence, and must **not `git push`** or merge.
+**Approval boundary:** The project owner accepted the **transactional circular-track architecture** on **20 November 2026**. The ticket records timing, ROM verification and implementation review separately. The project owner controls publication and integration after reviewing the local implementation commits.

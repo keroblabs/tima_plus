@@ -145,7 +145,8 @@ static void trace_iwm(char op, unsigned int address, uint8_t value, uint8_t old,
                 "IWM t=%" PRIu64 " cpu_t=%" PRIu64 " pc=%06x %c %06x=%02x q6=%u q7=%u ph=%x sel=%u"
                 " drive=%u enbl=%u/%u motor=%u off_at=%" PRIu64 " reg=%u cmd=%d ca2=%u mode=%02x"
                 " dir=%u trk=%u side=%u spindle=%u step=%" PRIu64 " ready=%" PRIu64
-                " ready_n=%u tach=%u media=%u bit=%u latch=%02x\n",
+                " ready_n=%u tach=%u media=%u bit=%u latch=%02x"
+                " write_bits=%u write_result=%u write_at=%" PRIu64 " pending=%u underrun=%u dirty=%x provisional=%x save_error=%d\n",
                 ticks, cpu_ticks, m68k_get_reg(NULL, M68K_REG_PPC), op, address, value,
                 !!(q & IWM_Q6), !!(q & IWM_Q7), iwm.switches & 15, iwm.sel,
                 !!(iwm.switches & IWM_EXTERNAL), !(enables & IWM_ENBL1), !(enables & IWM_ENBL2),
@@ -155,7 +156,8 @@ static void trace_iwm(char op, unsigned int address, uint8_t value, uint8_t old,
                 !!(iwm.switches & IWM_PHASE2), iwm.mode, drive.step_out, drive.cylinder, drive.side,
                 drive.spindle, drive.step_done_at, drive.ready_at, disk_img_sense(iwm.internal, 13),
                 disk_img_sense(iwm.internal, 7), !disk_img_sense(iwm.internal, 1),
-                drive.bit_position, iwm.latch);
+                drive.bit_position, iwm.latch, drive.write_bits, drive.write_result, iwm.write_at,
+                iwm.write_pending, iwm.write_underrun, drive.dirty_sides, drive.provisional_sides, drive.checkpoint_error);
 }
 
 void umac_iwm_trace(FILE *stream)

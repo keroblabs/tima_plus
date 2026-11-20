@@ -52,6 +52,7 @@ static void     print_help(char *n)
                "\t-r <rom path>\t\tDefault 'rom.bin'\n"
                "\t-W <rom dump path>\tDump the original ROM bytes\n"
                "\t-d <floppy path>\tAttach a raw or DiskCopy 4.2 Macintosh 800K image (read-only)\n"
+               "\t-w\t\t\tEnable persistent floppy writes (requires -d)\n"
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
@@ -231,6 +232,7 @@ int     main(int argc, char *argv[])
         int ch;
         int opt_disassemble = 0;
         bool opt_iwm_trace = false;
+        bool floppy_write = false;
         const char *scsi_filename = NULL;
         int scsi_id = -1;
         bool scsi_write = false;
@@ -260,8 +262,8 @@ int     main(int argc, char *argv[])
                         break;
 
                 case 'w':
-                        fprintf(stderr, "-w is unavailable with the read-only IWM floppy drive\n");
-                        return 1;
+                        floppy_write = true;
+                        break;
 
                 case 'I':
                         opt_iwm_trace = true;
@@ -296,6 +298,10 @@ int     main(int argc, char *argv[])
                         print_help(argv[0]);
                         return 1;
                 }
+        }
+        if (floppy_write && !disc_filename) {
+                fprintf(stderr, "-w requires a floppy image (-d)\n");
+                return 1;
         }
         if (!scsi_filename && (scsi_id != -1 || scsi_write)) {
                 fprintf(stderr, "-t and -p require a SCSI image (-s)\n");
@@ -362,7 +368,6 @@ int     main(int argc, char *argv[])
         conflict = find_path_alias(pram_lock_path, protected_paths,
                                    sizeof(protected_paths) / sizeof(protected_paths[0]),
                                    &conflicting_path);
-        free(pram_lock_path);
         if (conflict != 0) {
                 if (conflict > 0)
                         fprintf(stderr, "RTC/PRAM lock path conflicts with media/output path '%s'\n",
@@ -370,9 +375,38 @@ int     main(int argc, char *argv[])
                 else
                         fprintf(stderr, "Cannot validate RTC/PRAM lock path: %s\n",
                                 strerror(errno));
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
+
+        if (floppy_write) {
+                const char *other_media[] = {rom_filename, scsi_filename};
+                conflict = find_path_alias(disc_filename, other_media, 2, &conflicting_path);
+                char *floppy_lock = NULL;
+                if (!conflict) {
+                        const char *lock_protected[] = {rom_filename, ram_filename, rom_dump_filename,
+                                                         disc_filename, scsi_filename, pram_path, pram_lock_path};
+                        floppy_lock = disk_img_lock_path(disc_filename);
+                        conflict = floppy_lock ? find_path_alias(floppy_lock, lock_protected,
+                                                                 sizeof(lock_protected) / sizeof(lock_protected[0]),
+                                                                 &conflicting_path) : -1;
+                }
+                if (conflict != 0) {
+                        const char *path = floppy_lock ? floppy_lock : disc_filename;
+                        if (conflict > 0)
+                                fprintf(stderr, "Writable floppy path '%s' conflicts with media/output path '%s'\n",
+                                        path, conflicting_path);
+                        else
+                                fprintf(stderr, "Cannot validate writable floppy path '%s': %s\n", path, strerror(errno));
+                        free(floppy_lock);
+                        free(pram_lock_path);
+                        free(pram_path);
+                        return 1;
+                }
+                free(floppy_lock);
+        }
+        free(pram_lock_path);
 
         int pram_state = rtc_pram_check(pram_path);
         if (pram_state < 0) {
@@ -416,7 +450,7 @@ int     main(int argc, char *argv[])
         }
         printf("Macintosh Plus V3 ROM, checksum %08" PRIx32 "\n", ROM_PLUS_V3_CHECKSUM);
 
-        floppy = disk_img_open(disc_filename);
+        floppy = floppy_write ? disk_img_open_writable(disc_filename) : disk_img_open(disc_filename);
         if (!floppy) {
                 const char *message;
                 if (errno == EINVAL)
@@ -431,7 +465,7 @@ int     main(int argc, char *argv[])
                 return 1;
         }
         if (disc_filename)
-                printf("Floppy: '%s' (800K, write protected)\n", disc_filename);
+                printf("Floppy: '%s' (800K, %s)\n", disc_filename, floppy_write ? "writable" : "write protected");
 
         struct scsi_image scsi_image;
         struct scsi_disk scsi_disk;
@@ -566,6 +600,7 @@ int     main(int argc, char *argv[])
         // Main loop
 
         int done = 0;
+        bool cpu_done = false;
         int mouse_button = 0;
         const uint64_t host_hz = SDL_GetPerformanceFrequency();
         const uint64_t present_interval = host_hz / 60;
@@ -575,13 +610,14 @@ int     main(int argc, char *argv[])
         uint64_t next_1hz = next_present + host_hz;
         do {
                 SDL_Event event;
+                bool quit_requested = false;
                 int mousex = 0;
                 int mousey = 0;
 
                 if (SDL_PollEvent(&event)) {
                         switch (event.type) {
                         case SDL_QUIT:
-                                done = 1;
+                                quit_requested = true;
                                 break;
 
                         case SDL_WINDOWEVENT:
@@ -625,9 +661,20 @@ int     main(int argc, char *argv[])
                         }
                 }
 
-                umac_mouse(mousex, mousey, mouse_button);
-
-                done |= umac_loop();
+                if (!cpu_done && !quit_requested) {
+                        umac_mouse(mousex, mousey, mouse_button);
+                        cpu_done = umac_loop() != 0;
+                        quit_requested = cpu_done;
+                }
+                if (quit_requested) {
+                        disk_img_abort_write(floppy);
+                        if (disk_img_checkpoint(floppy) == 0) {
+                                done = 1;
+                        } else {
+                                fputs("Floppy save failed. The session remains open for a retry.\n", stderr);
+                                SDL_SetWindowTitle(window, "umac (floppy save failed)");
+                        }
+                }
 
                 uint64_t host_now = SDL_GetPerformanceCounter();
                 /* The desktop's key repeat and double-click timing follow VBL. */
@@ -675,7 +722,8 @@ close_scsi:
 close_media:
         if (ram_base != MAP_FAILED)
                 munmap(ram_base, RAM_SIZE);
-        disk_img_close(floppy);
+        if (disk_img_close(floppy) < 0)
+                result = 1;
         munmap(rom_base, ROM_SIZE);
         free(pram_path);
         return result;

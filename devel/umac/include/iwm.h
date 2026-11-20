@@ -17,6 +17,10 @@ enum {
         IWM_Q7 = 1 << 7,
 };
 
+/* Apple IWM asynchronous fast mode. The first holding-register load
+ * follows the write-state transition by seven FCLK periods on the Plus. */
+enum { IWM_WRITE_START_TICKS = 7 };
+
 /* Asserted pins, represented as set bits despite their active-low polarity. */
 enum {
         IWM_ENBL1 = 1 << 0,
@@ -28,11 +32,19 @@ struct iwm {
         uint64_t ticks;
         uint64_t motor_off_at;
         uint64_t clear_at;
+        uint64_t write_at;
         uint8_t switches;
         uint8_t mode;
         uint8_t shift;
         uint8_t latch;
+        uint8_t write_hold;
+        uint8_t write_shift;
+        uint8_t write_left;
         bool sel;
+        bool write_started;
+        bool write_pending;
+        bool write_media;
+        bool write_underrun;
         bool warned_write;
 };
 

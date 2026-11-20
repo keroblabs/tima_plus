@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "cpu_cb.h"
@@ -30,6 +31,11 @@ static const unsigned int track_lengths[] = {74558, 68475, 62237, 55954, 49789};
 
 static void remove_image(void)
 {
+        char *lock = disk_img_lock_path(image_path);
+        if (lock) {
+                unlink(lock);
+                free(lock);
+        }
         unlink(image_path);
 }
 
@@ -76,18 +82,24 @@ static void make_image(void)
         CHECK(fclose(image) == 0);
 }
 
-static void verify_image(void)
+static void verify_image_contents(bool written)
 {
         FILE *image = fopen(image_path, "rb");
         CHECK(image);
         for (unsigned int block = 0; block < 1600; ++block) {
                 uint8_t sector[512];
                 CHECK(fread(sector, 1, sizeof(sector), image) == sizeof(sector));
+                bool zeroed = written && (block == 0 || block == 12);
                 for (unsigned int i = 0; i < sizeof(sector); ++i)
-                        CHECK(sector[i] == fixture_byte(block, i));
+                        CHECK(sector[i] == (zeroed ? 0 : fixture_byte(block, i)));
         }
         CHECK(fgetc(image) == EOF && !ferror(image));
         CHECK(fclose(image) == 0);
+}
+
+static void verify_image(void)
+{
+        verify_image_contents(false);
 }
 
 static void select_register(struct iwm *iwm, unsigned int reg, uint64_t t)
@@ -601,6 +613,380 @@ static void write_fixture(const uint8_t *bytes, size_t length)
         CHECK(fclose(file) == 0);
 }
 
+static struct disk_img *start_writable(struct iwm *iwm)
+{
+        struct disk_img *disk = disk_img_open_writable(image_path);
+        CHECK(disk);
+        iwm_init(iwm, disk, 0);
+        set_mode(iwm, 0x1f);
+        iwm_read(iwm, SW(MTRON), 0);
+        command(iwm, 4, false, 0);
+        select_register(iwm, 8, disk_img_status(disk).ready_at);
+        CHECK(disk_img_sense(disk, 3));
+        return disk;
+}
+
+static void start_serial(struct iwm *iwm, uint64_t ticks, uint8_t byte)
+{
+        iwm_read(iwm, SW(Q6H), ticks);
+        iwm_write(iwm, SW(Q7H), byte, ticks);
+}
+
+static void test_write_timing(void)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_writable(&iwm);
+        uint64_t start = iwm.ticks;
+        uint64_t first = start + IWM_WRITE_START_TICKS;
+        uint64_t byte_ticks = 8 * DISK_IMG_BIT_TICKS;
+        start_serial(&iwm, start, 0x81);
+        CHECK(iwm_read(&iwm, SW(Q6L), first - 1) == 0x7f);
+        CHECK(!disk_img_status(disk).write_bits);
+        CHECK(iwm_read(&iwm, SW(Q6L), first) == 0xff);
+        CHECK(disk_img_status(disk).write_bits == 1 && iwm.write_shift == 0x02);
+        iwm_write(&iwm, SW(Q6H), 0x12, first + 12);
+        iwm_write(&iwm, SW(Q6H), 0x5a, first + 24);
+        CHECK(iwm_read(&iwm, SW(Q6L), first + byte_ticks - 1) == 0x7f);
+        CHECK(disk_img_status(disk).write_bits == 8);
+        CHECK(iwm_read(&iwm, SW(Q6L), first + byte_ticks) == 0xff);
+        CHECK(disk_img_status(disk).write_bits == 9 && iwm.write_shift == 0xb4);
+        uint64_t empty = first + 2 * byte_ticks;
+        CHECK(iwm_read(&iwm, SW(Q6L), empty - 1) == 0xff);
+        CHECK(iwm_read(&iwm, SW(Q6L), empty) == 0xbf && iwm.write_underrun);
+        iwm_write(&iwm, SW(Q6H), 0xff, empty + 1);
+        CHECK(iwm_read(&iwm, SW(Q6L), empty + byte_ticks) == 0xbf);
+        CHECK(disk_img_status(disk).write_bits == 16);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_ABORTED);
+        CHECK(iwm_read(&iwm, SW(Q7L), empty + byte_ticks) == 0);
+        CHECK(!iwm.write_underrun && !iwm.write_started);
+
+        start_serial(&iwm, iwm.ticks, 0xff);
+        uint64_t exit_tick = iwm.write_at + 5 * DISK_IMG_BIT_TICKS - 1;
+        CHECK(iwm_read(&iwm, SW(Q6L), exit_tick) == 0xff);
+        CHECK(iwm_read(&iwm, SW(Q7L), exit_tick) == 0);
+        CHECK(disk_img_status(disk).write_bits == 5);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_REJECTED);
+        CHECK(!disk_img_status(disk).dirty_sides);
+
+        start_serial(&iwm, iwm.ticks, 0xff);
+        iwm_read(&iwm, SW(EXTERNAL), iwm.write_at + DISK_IMG_BIT_TICKS);
+        CHECK(!disk_img_status(disk).spindle && disk_img_status(disk).write_bits == 2);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_ABORTED);
+        iwm_read(&iwm, SW(Q7L), iwm.ticks);
+        iwm_read(&iwm, SW(INTERNAL), iwm.ticks);
+        command(&iwm, 4, false, iwm.ticks);
+        select_register(&iwm, 8, disk_img_status(disk).ready_at);
+        start_serial(&iwm, iwm.ticks, 0xff);
+        iwm_reset(&iwm, iwm.write_at + DISK_IMG_BIT_TICKS);
+        CHECK(!iwm.write_started && !iwm.write_underrun && !iwm.write_pending);
+        CHECK(disk_img_status(disk).write_bits == 2);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_ABORTED);
+        CHECK(disk_img_close(disk) == 0);
+        verify_image();
+        puts("Write handshake, bit timing, holding replacement, Q7L cutoff, underrun, enable loss and reset passed");
+}
+
+enum {
+        SECTOR_RECORD_BYTES = 729,
+        SECTOR_WRITE_BYTES = SECTOR_RECORD_BYTES - 12,
+        TEST_FORMAT_CAPACITY = 2 * ((74558 + 7) / 8),
+};
+
+static const uint8_t format_sync[] = {0xff, 0x3f, 0xcf, 0xf3, 0xfc, 0xff};
+
+static size_t format_stream(const struct disk_img_span *span, unsigned int cylinder,
+                            unsigned int groups, uint8_t *bytes)
+{
+        unsigned int sectors = sector_counts[cylinder / 16];
+        size_t size = 0;
+        bytes[size++] = 0xc7;
+        for (unsigned int group = 0; group < 200; ++group) {
+                memcpy(bytes + size, format_sync, sizeof(format_sync));
+                size += sizeof(format_sync);
+        }
+        for (unsigned int slot = 0; slot < sectors; ++slot) {
+                for (unsigned int group = 0; group < groups; ++group) {
+                        memcpy(bytes + size, format_sync, sizeof(format_sync));
+                        size += sizeof(format_sync);
+                }
+                unsigned int address = (slot + 1) * span->length / sectors - SECTOR_RECORD_BYTES * 8;
+                for (unsigned int i = 0; i < SECTOR_RECORD_BYTES; ++i) {
+                        if (i != 11) /* The ROM shares this FF with the next sync. */
+                                bytes[size++] = read_bits(span, address + i * 8, 8);
+                }
+        }
+        CHECK(size <= TEST_FORMAT_CAPACITY);
+        return size;
+}
+
+static void capture(struct disk_img *disk, uint64_t first, const uint8_t *bytes, unsigned int bits)
+{
+        CHECK(disk_img_begin_write(disk, first));
+        for (unsigned int bit = 0; bit < bits; ++bit)
+                disk_img_write_bit(disk, (bytes[bit / 8] >> (7 - bit % 8)) & 1);
+}
+
+static void test_format_validation(struct disk_img *disk, struct disk_img_span span, uint64_t ticks)
+{
+        uint8_t stream[TEST_FORMAT_CAPACITY];
+        uint8_t saved[TEST_FORMAT_CAPACITY / 2];
+        size_t packed = (span.length + 7) / 8;
+        memcpy(saved, span.bits, packed);
+        size_t size = format_stream(&span, 0, 7, stream);
+        capture(disk, ticks, stream, size * 4);
+        CHECK(!memcmp(span.bits, saved, packed));
+        disk_img_finish_write(disk);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_REJECTED);
+
+        unsigned int header = 1 + (200 + 7) * 6;
+        unsigned int data = header + 11 + 6;
+        /* Break the header XOR, data identity, a GCR code and a data checksum. */
+        const unsigned int damaged[] = {header + 7, data + 3, data + 4, data + 4 + 699};
+        const uint8_t invalid[] = {0x96, 0x97, 0x80, 0x97};
+        for (unsigned int i = 0; i < sizeof(damaged) / sizeof(damaged[0]); ++i) {
+                unsigned int pos = damaged[i];
+                uint8_t restore = stream[pos];
+                if (restore == invalid[i])
+                        stream[pos] = 0x9a;
+                else
+                        stream[pos] = invalid[i];
+                capture(disk, ticks, stream, size * 8);
+                disk_img_finish_write(disk);
+                CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_REJECTED);
+                CHECK(!disk_img_status(disk).dirty_sides && !memcmp(span.bits, saved, packed));
+                stream[pos] = restore;
+        }
+
+        /* Lose a bit at the first data prologue. No byte-aligned record may
+         * be borrowed from the old candidate copy to satisfy validation. */
+        CHECK(disk_img_begin_write(disk, ticks));
+        for (unsigned int bit = 0; bit < size * 8; ++bit)
+                if (bit != data * 8)
+                        disk_img_write_bit(disk, (stream[bit / 8] >> (7 - bit % 8)) & 1);
+        disk_img_finish_write(disk);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_REJECTED);
+        CHECK(!disk_img_status(disk).dirty_sides && !memcmp(span.bits, saved, packed));
+
+        size = format_stream(&span, 0, 11, stream);
+        capture(disk, ticks, stream, size * 8);
+        disk_img_finish_write(disk);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_PROVISIONAL);
+        CHECK(disk_img_status(disk).dirty_sides == 1 && disk_img_status(disk).provisional_sides == 1);
+        CHECK(memcmp(span.bits, saved, packed));
+        CHECK(disk_img_close(disk) < 0 && errno == EBADMSG);
+        disk_img_command(disk, 2, false);
+        CHECK(!disk_img_status(disk).step_done_at && !disk_img_sense(disk, 2));
+        /* Retry with the original valid records on the same active cylinder. */
+        span.bits = saved;
+        size = format_stream(&span, 0, 7, stream);
+        capture(disk, ticks, stream, size * 8);
+        disk_img_finish_write(disk);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_COMMITTED);
+        CHECK(disk_img_checkpoint(disk) == 0 && disk_img_sense(disk, 2));
+}
+
+static void verify_inverse(const uint8_t *expected, size_t size)
+{
+        struct disk_img *disk = disk_img_open_writable(image_path);
+        CHECK(disk);
+        disk_img_set_enabled(disk, true, 0);
+        disk_img_command(disk, 4, false);
+        uint64_t ticks = disk_img_status(disk).ready_at;
+        disk_img_advance(disk, ticks, false);
+        struct stat original, after;
+        CHECK(stat(image_path, &original) == 0);
+        uint8_t stream[TEST_FORMAT_CAPACITY];
+        for (unsigned int cylinder = 0; cylinder < 80; ++cylinder) {
+                for (unsigned int side = 0; side < 2; ++side) {
+                        disk_img_select_head(disk, side);
+                        struct disk_img_span span = disk_img_advance(disk, ticks += 16, true);
+                        CHECK(span.count == 1);
+                        size_t length = format_stream(&span, cylinder, 7, stream);
+                        if (cylinder == 0 && side == 0)
+                                test_format_validation(disk, span, ticks);
+                        /* Vary the angular phase across cylinders, including
+                         * payload bytes that cross a partial last track byte. */
+                        ticks += (cylinder * 233 + side * 1151 + 7) * DISK_IMG_BIT_TICKS;
+                        disk_img_advance(disk, ticks, false);
+                        capture(disk, ticks, stream, length * 8 - 5);
+                        disk_img_finish_write(disk);
+                        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_COMMITTED);
+                }
+                CHECK(disk_img_status(disk).dirty_sides == 3);
+                disk_img_command(disk, 2, false);
+                CHECK(disk_img_status(disk).step_done_at > ticks);
+                ticks = disk_img_status(disk).step_done_at;
+                disk_img_advance(disk, ticks, false);
+        }
+        CHECK(disk_img_close(disk) == 0);
+        CHECK(stat(image_path, &after) == 0 && after.st_ino == original.st_ino);
+        FILE *file = fopen(image_path, "rb");
+        CHECK(file);
+        for (size_t i = 0; i < size; ++i)
+                CHECK(fgetc(file) == expected[i]);
+        CHECK(fgetc(file) == EOF && !ferror(file) && fclose(file) == 0);
+        puts("Verified inverse GCR for 1600 sectors and 1600 nonzero tags across both heads and all zones");
+}
+
+#ifdef UMAC_TEST_IO_WRAPPERS
+enum io_call { IO_NONE, IO_WRITE, IO_FILE_SYNC, IO_RENAME, IO_DIR_SYNC };
+static enum io_call fail_io;
+
+ssize_t __real_write(int fd, const void *buf, size_t size);
+int __real_fsync(int fd);
+int __real_rename(const char *from, const char *to);
+
+static bool inject_error(enum io_call call)
+{
+        if (fail_io != call)
+                return false;
+        fail_io = IO_NONE;
+        errno = EIO;
+        return true;
+}
+
+ssize_t __wrap_write(int fd, const void *buf, size_t size)
+{
+        return inject_error(IO_WRITE) ? -1 : __real_write(fd, buf, size);
+}
+
+int __wrap_fsync(int fd)
+{
+        struct stat st;
+        CHECK(fstat(fd, &st) == 0);
+        return inject_error(S_ISDIR(st.st_mode) ? IO_DIR_SYNC : IO_FILE_SYNC) ? -1 : __real_fsync(fd);
+}
+
+int __wrap_rename(const char *from, const char *to)
+{
+        return inject_error(IO_RENAME) ? -1 : __real_rename(from, to);
+}
+#endif
+
+static void mount_aliases(struct disk_img *disk)
+{
+        char alias[sizeof(image_path) + sizeof(".alias")];
+        snprintf(alias, sizeof(alias), "%s.alias", image_path);
+        CHECK(!disk_img_open_writable(image_path) && errno == EWOULDBLOCK);
+        CHECK(symlink(image_path, alias) == 0);
+        CHECK(!disk_img_open_writable(alias) && errno == ELOOP);
+        CHECK(unlink(alias) == 0);
+        CHECK(link(image_path, alias) == 0);
+        CHECK(!disk_img_open_writable(alias) && errno == EMLINK);
+        CHECK(unlink(alias) == 0);
+        CHECK(disk_img_sense(disk, 3));
+}
+
+static void serial_sector(struct iwm *iwm, struct disk_img *disk, bool zeroed, bool overwrite_address)
+{
+        uint64_t ticks = iwm->ticks + DISK_IMG_BIT_TICKS;
+        iwm_advance(iwm, ticks);
+        struct disk_img_span span = disk_img_advance(disk, ticks += DISK_IMG_BIT_TICKS, true);
+        CHECK(span.length == track_lengths[0] && span.count == 1);
+        const unsigned int begin = span.length / 12 - SECTOR_WRITE_BYTES * 8;
+        CHECK(begin % 8); /* This write begins away from a packed-byte boundary. */
+        uint8_t stream[SECTOR_WRITE_BYTES];
+        for (unsigned int i = 0; i < sizeof(stream); ++i)
+                stream[i] = read_bits(&span, begin + i * 8, 8);
+        if (zeroed)
+                memset(stream + 10, 0x96, 703); /* The checksums of an all-zero sector are zero. */
+        unsigned int position = disk_img_status(disk).bit_position;
+        unsigned int first_bit = overwrite_address ? begin - 24 : begin;
+        unsigned int distance = (first_bit + span.length - position) % span.length;
+        uint64_t first = ticks + (span.length + distance) * DISK_IMG_BIT_TICKS;
+        start_serial(iwm, first - IWM_WRITE_START_TICKS, stream[0]);
+        for (unsigned int i = 1; i < sizeof(stream); ++i) {
+                uint64_t load = first + (i - 1) * 8 * DISK_IMG_BIT_TICKS + 32;
+                CHECK(iwm_read(iwm, SW(Q6L), load) == 0xff);
+                iwm_write(iwm, SW(Q6H), stream[i], load);
+        }
+        /* Leave three filler bits pending, without cutting the DE AA. */
+        unsigned int bit_count = sizeof(stream) * 8 - 3;
+        uint64_t end = first + (bit_count - 1) * DISK_IMG_BIT_TICKS;
+        CHECK(iwm_read(iwm, SW(Q6L), end) == 0xff);
+        iwm_read(iwm, SW(Q7L), end);
+        CHECK(disk_img_status(disk).write_bits == bit_count);
+}
+
+static void test_checkpoint(void)
+{
+        struct iwm iwm;
+        struct disk_img *disk = start_writable(&iwm);
+        mount_aliases(disk);
+        struct stat original, current;
+        CHECK(stat(image_path, &original) == 0);
+        CHECK(disk_img_checkpoint(disk) == 0);
+        CHECK(stat(image_path, &current) == 0 && original.st_ino == current.st_ino);
+
+        serial_sector(&iwm, disk, false, false);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_UNCHANGED);
+        CHECK(!disk_img_status(disk).dirty_sides);
+
+        serial_sector(&iwm, disk, true, false);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_COMMITTED);
+        CHECK(disk_img_status(disk).dirty_sides == 1);
+        start_serial(&iwm, iwm.ticks, 0xff);
+        iwm_set_sel(&iwm, true, iwm.write_at + DISK_IMG_BIT_TICKS);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_ABORTED);
+        CHECK(disk_img_status(disk).dirty_sides == 1 && disk_img_status(disk).side == 1);
+        iwm_read(&iwm, SW(Q7L), iwm.ticks);
+
+        serial_sector(&iwm, disk, true, true);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_REJECTED);
+        CHECK(disk_img_status(disk).dirty_sides == 1);
+        serial_sector(&iwm, disk, true, false);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_COMMITTED);
+        CHECK(disk_img_status(disk).dirty_sides == 3);
+        start_serial(&iwm, iwm.ticks, 0xff);
+        iwm_reset(&iwm, iwm.write_at + DISK_IMG_BIT_TICKS);
+        CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_ABORTED);
+        CHECK(!disk_img_status(disk).spindle && disk_img_status(disk).dirty_sides == 3);
+        verify_image();
+
+#ifdef UMAC_TEST_IO_WRAPPERS
+        const enum io_call calls[] = {IO_WRITE, IO_FILE_SYNC, IO_RENAME};
+        for (unsigned int i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
+                fail_io = calls[i];
+                CHECK(disk_img_close(disk) < 0 && errno == EIO && fail_io == IO_NONE);
+                CHECK(disk_img_status(disk).dirty_sides == 3);
+                CHECK(stat(image_path, &current) == 0 && original.st_ino == current.st_ino);
+                verify_image();
+        }
+#endif
+
+        /* Block a real seek and eject after a path replacement. Restore
+         * the original inode and retry without losing either dirty side. */
+        char moved[sizeof(image_path) + sizeof(".moved")];
+        snprintf(moved, sizeof(moved), "%s.moved", image_path);
+        CHECK(rename(image_path, moved) == 0);
+        const uint8_t other[] = {1, 3, 5, 7};
+        write_fixture(other, sizeof(other));
+        disk_img_set_enabled(disk, true, iwm.ticks);
+        disk_img_command(disk, 2, false);
+        CHECK(!disk_img_status(disk).step_done_at && !disk_img_sense(disk, 2));
+        disk_img_command(disk, 6, true);
+        CHECK(!disk_img_sense(disk, 1) && disk_img_status(disk).dirty_sides == 3);
+        CHECK(stat(image_path, &current) == 0 && current.st_size == sizeof(other));
+        CHECK(rename(moved, image_path) == 0);
+
+#ifdef UMAC_TEST_IO_WRAPPERS
+        fail_io = IO_DIR_SYNC;
+        CHECK(disk_img_checkpoint(disk) < 0 && errno == EIO && fail_io == IO_NONE);
+        CHECK(disk_img_status(disk).dirty_sides == 3);
+        CHECK(!disk_img_open_writable(image_path) && errno == EWOULDBLOCK);
+        verify_image_contents(true); /* The rename was visible, but is not yet durable. */
+#endif
+        disk_img_command(disk, 6, true);
+        CHECK(disk_img_sense(disk, 1) && !disk_img_status(disk).dirty_sides && disk_img_sense(disk, 2));
+        CHECK(stat(image_path, &current) == 0 && original.st_ino != current.st_ino);
+        CHECK((original.st_mode & 07777) == (current.st_mode & 07777));
+        CHECK(disk_img_close(disk) == 0);
+        struct disk_img *reopened = disk_img_open(image_path);
+        CHECK(reopened && disk_img_close(reopened) == 0);
+        verify_image_contents(true);
+        puts("Both heads survived interrupted writes, reset and failed checkpoints, then saved on eject");
+}
+
 static void test_diskcopy(void)
 {
         const unsigned int data_start = 84;
@@ -631,6 +1017,7 @@ static void test_diskcopy(void)
         }
 
         write_fixture(image, image_size);
+        verify_inverse(image, image_size);
         struct disk_img *disk = disk_img_open(image_path);
         CHECK(disk);
         test_encoded_disk(disk, true);
@@ -711,6 +1098,14 @@ int main(int argc, char **argv)
                 return 0;
         }
         make_image();
+        if (!strcmp(argv[1], "write_timing")) {
+                test_write_timing();
+                return 0;
+        }
+        if (!strcmp(argv[1], "checkpoint")) {
+                test_checkpoint();
+                return 0;
+        }
         if (!strcmp(argv[1], "motor")) {
                 test_immediate_motor_off();
                 test_delayed_motor_off(false);
