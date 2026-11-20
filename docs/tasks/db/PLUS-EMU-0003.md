@@ -122,6 +122,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 | `EMU3-R4` | `CORRECTION_REQUIRED` | The SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Verify comparable startup throughput, host presentation and guest clock rates, original-ROM IWM boot, SCSI, RTC/PRAM and input. | `VERIFIED` |
 | `EMU3-R5` | `CORRECTION_REQUIRED` | The SDL loader rejected `devel/umac/plus-system.image` because the disk backend required exactly 819,200 bytes. The reported 838,484-byte file has a DiskCopy 4.2 header, 1,600 data sectors and 1,600 sector tags. | Load the image directly, preserve all tags through GCR encoding, reject malformed containers, and test raw and tagged original-ROM boot and media protection. | `VERIFIED` |
 | `EMU3-R6` | `CORRECTION_REQUIRED` | Before the correction, inactive /ENBL left the Sony spindle running and the next selection reported motor-on. The generated fixture reproduced the active TACH and ready state with both enables inactive. | Propagate effective per-drive enable transitions at their exact C8M ticks. Verify immediate and delayed motor-off, cancellation, drive selection, reset and original-ROM boot. | `APPROVED` |
+| `EMU3-R7` | `VERIFICATION_REQUIRED` | The owner reported floppy startup with both volumes mounted, followed by SCSI startup and an empty internal drive after Finder's Shut Down. | Identify the startup disk and mounted volumes, trace the guest's eject and compare with a direct hardware reset and a fresh launch. | `VERIFIED` |
 
 ### EMU3-R6 — Motor-enable correction: developer handoff
 
@@ -191,6 +192,42 @@ ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir /tmp/
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s devel/umac/tests -p 'test_hfs_to_device.py'
 ```
 
+### EMU3-R7 — Dual-media startup and Finder Shut Down
+
+Reproduced with the 4 MiB Debug SDL build at `ae6ca87`, the unmodified Plus V3 ROM, `HD10_512.hda` on SCSI ID 1 and `plus-system.image` in the internal drive. Both images were read-only, and RAM and PRAM were isolated. The offscreen diagnostic set cursor coordinates in temporary guest RAM and sent SDL button events to select the displayed Finder menu item. Startup and mount evidence came from `BtDskRfn` and the volume control block queue.
+
+| Action | Startup disk | Mounted volumes |
+| --- | --- | --- |
+| Launch with `-s` and `-d` | Internal `.Sony` (driver `-5`). The floppy's System file Get Info showed 3.2 and About the Finder showed 5.3. | `System Tools` and `Macintosh`. Finder displayed the hard disk's directory. |
+| Select Finder 5.3 **Special → Shut Down** | The same emulator process rebooted from the SCSI disk (driver `-34`). The About dialog showed System 6.0.8 and Finder 6.1.8. | `Macintosh` |
+| Call `umac_reset()` in a separate two-disk run with the floppy still inserted | Internal `.Sony` (driver `-5`). The drive reported the medium present immediately after reset. | `System Tools` and `Macintosh` |
+| Relaunch with both arguments and a copy of the PRAM saved after the SCSI reboot | Internal `.Sony` (driver `-5`). The new desktop process inserted the floppy from `-d`. | `System Tools` and `Macintosh` |
+
+The trace after releasing the mouse on **Shut Down** establishes the order of events.
+
+| C8M tick | ROM PC | Observation |
+| ---: | --- | --- |
+| 37,997,568,288 | `$417FDA` | The original Sony driver strobed `cmd=6 ca2=1` (EJECT) with the internal drive enabled. The drive reported `media=0`. |
+| 37,998,352,280 | `$418606` | Sony register 1 read `$BF`, with /CSTIN high to report an empty drive. |
+| 38,102,317,340 | `$40011C` | ROM startup wrote IWM mode `$1F` with the internal drive still empty. |
+
+This sequence matches the 1986 Apple drive guide's description of Shut Down ejecting inserted disks and restarting the Macintosh. In Phase 1, the guest EJECT command clears the drive's media-present state. A guest reset preserves that state, so the next startup sees only the bootable SCSI volume. A new emulator process loads the command-line floppy again. [Apple 3.5 Drive Owner's Guide, p. 11](https://vintageapple.org/macmanuals/pdf/Apple_3.5_Drive_Owners_Guide_1986.pdf), [Phase 1 media lifecycle](../../04-iwm-emulation.md#1210-disk-lifecycle-insertion-eject-and-drive-power-software-and-future-stm32), [Sony drive commands](../../../devel/umac/src/disk_img.c)
+
+To reproduce from the repository root, launch the two images in a private working directory and select **Special → Shut Down**. The ROM and both disk images had identical SHA-256 values before and after the diagnostics. The tagged Release CTest suite passed 13/13.
+
+```sh
+project_dir=$PWD
+probe_dir=$(mktemp -d /tmp/tima-plus-r7.XXXXXX)
+(
+  cd "$probe_dir"
+  "$project_dir/build/umac" -r "$project_dir/devel/umac/rom.bin" \
+    -s "$project_dir/devel/umac/HD10_512.hda" \
+    -d "$project_dir/devel/umac/plus-system.image" \
+    -P probe.pram --trace-iwm 2> iwm.trace
+)
+ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
+```
+
 **Notes**
 
 - **2026-11-19 — Decision and registration:** Project owner approved splitting the authentic IWM + disk implementation into two components and two phases. This ticket covers Phase 1 read-only, **including disabling ROM patching**, with writing explicitly stubbed. The follow-on write ticket is `PLUS-EMU-0010` because `PLUS-EMU-0009` is already reserved/closed for RTC and PRAM. No code changes or tests were performed when this ticket was opened.
@@ -218,6 +255,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s devel/umac/tests -p 't
 - **2026-11-20 — Rework:** Reproduced the stale spindle with the generated fixture linked to the pre-fix core at `b65729c`. The IWM now compares effective enable outputs when applying switches, expiring the off-delay or resetting. The disk backend advances to the transition tick and cancels any step still pending when enable is lost. Controller initialization is separate from live reset so reset can process a pending timer before clearing IWM state.
 - **2026-11-20 — Verification:** Added `iwm_motor_enable` and reset assertions in the original-ROM test. Recorded the deterministic trace, test commands and raw/tagged boot and regression results above. Marked `EMU3-R6` `VERIFIED`.
 - **2026-11-20 — Status Change:** Recorded the implementation and tests in local commit `a02b4ef72c02361f7fc68ef20e65a3c7691b2527`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
+- **2026-11-20 — Verification:** Reproduced the dual-media startup and Finder Shut Down sequence. `EMU3-R7` is `VERIFIED` as expected eject and restart behaviour for Finder 5.3. The trace shows a guest eject before ROM restart, and the hardware-reset control retained both volumes. The 13-test regression suite passed. The ticket stays in `REVIEW`.
 
 - **2026-11-20 — Independent Code Review / Approval:** Reviewer inspected [`a02b4ef`](https://github.com/keroblabs/tima_plus/commit/a02b4ef72c02361f7fc68ef20e65a3c7691b2527) and the recorded R6-T1–R6-T6 assertions. Approved timestamped effective /ENBL callbacks, exact cutoff before subsequent rotation, timer cancellation, drive switching, spindle stop without disk eject/cylinder loss and reset semantics. Developer recorded 13/13 Release tests for raw and tagged 800K images, 13/13 ASan/UBSan, original-ROM Finder boot and SCSI/RTC/PRAM checks; **reviewer did not independently execute tests**. No blocking finding. Marked `EMU3-R6` and commit `a02b4ef` `APPROVED`; `PLUS-EMU-0003` `REVIEW` → `RESOLVED`, awaiting project-owner final review/merge. The mid-step cancel and immediate virtual eject are documented Phase-1 simplifications.
 
