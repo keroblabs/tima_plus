@@ -101,7 +101,7 @@ All reference inputs retained their hashes. Writes and formats used disposable c
 | `EMU10-R1` | `CORRECTION_REQUIRED` | Original `CtlFormat` shares the second address-trailer `$FF` with the data sync group. The first decoder also dropped bits when a byte straddled a partial final packed byte. | Parse the ROM's 27-byte template and handle both packed bytes before wrapping. Run full ROM format/verify and inverse checks on all zones and both heads. | `VERIFIED` |
 | `EMU10-R2` | `CORRECTION_REQUIRED` | Ordinary writable raw startup on the supplied System Tools image and a separate System 6.0.8 image issued writes with nonzero tags. Commit `4fffe22` blocked the raw checkpoint and left the desktop open on a close request. | Both raw systems now boot writable. `.Sony` writes with nonzero tags preserved the raw sector data across seek, cache rebuild and reopen. Tagged DiskCopy persisted data and tags. PLUS-EMU-0003 read-only boot passed on both formats. | `VERIFIED` |
 | `EMU10-R3` | `CORRECTION_REQUIRED` | `65181de` commented out `t` in `m68ki_exception_trapN()`, which failed compilation when trap callbacks were enabled. It also changed unused-variable declarations in `m68k_in.c` outside the floppy scope. | Restored the two files. The trap-callback configuration compiles and `devel/Musashi` matches both `0e5f8dd` and `origin/main`. | `VERIFIED` |
-| `EMU10-R4` | `VERIFICATION_REQUIRED` | The reviewer had automated original-ROM results and owner read tests. Owner-run guest GUI writes and formatting were **NOT TESTED**. | Developer guest UI save, eject, fresh-process reopen and two-sided format passed on disposable raw and tagged floppies. The owner-run repetition remains **NOT TESTED** and owner acceptance is pending. See the evidence below. | `OPEN` |
+| `EMU10-R4` | `VERIFICATION_REQUIRED` | Original-ROM automated tests were already reported, but a genuine guest GUI save/reopen/format workflow had been missing. | **Developer GUI verification accepted by reviewer:** TeachText created/saved/closed and reopened documents on disposable raw and tagged System 6.0.8; Finder two-sided erase completed all 160 cylinder/head pairs and both images remounted clean. The erase workflow used a temporary SDL insertion probe (not a production insertion UI). Recorded hashes and media state appear below; screenshots/traces remain in a developer-local `/tmp` directory and were not inspected independently here. Owner-operated repetition remains **NOT TESTED**, as an optional final acceptance check rather than a discovered code defect. | `VERIFIED` |
 
 **Review assessment (independent static inspection, 20 November 2026)**
 
@@ -123,6 +123,13 @@ The four ejects reported `media=0`, `dirty=0` and `save_error=0`. Raw files stay
 | Same System 6.0.8 data in tagged DC42 with zero initial tags, TeachText save and reopen | `ddbe722e916446ca409e156da78682ed29d577b7f472b17fd220aa961bb498ba` | `8920e21815ee8103f031521844e6a08ab9ed13ae136d48eb21fa09156ffc2db7` |
 | Raw data extracted from the `Data Only` fixture, Finder two-sided erase and reopen | `287eeb9854e20afdcec9d8efb91c7ffdc42e3b242fd3f31c170d1ca9ee7f4edc` | `bb19a7248c5ce3a08c1cfc849f0c6eb8e9346ef89d8d680c334860ac1c87f1da` |
 | Tagged `Data Only` fixture, Finder two-sided erase and reopen | `0fa1db27aa7c148b468ddf2b53633f311942d425b5e8311573bb1948e022b96a` | `061cb4ca6bdd5c5a83001c68019413c816610c31d5f785e240d822b4e7fcfb3b` |
+
+**Second independent review (20 November 2026, branch `docs-iwm-transactional-write`)**
+
+- Confirmed that commit [`ab01c77`](https://github.com/keroblabs/tima_plus/commit/ab01c773e844918a00a5ee502710127aabfb2e28) restores `devel/Musashi/m68k_in.c` and `m68kcpu.h` to **byte-identical blobs on `main`**. Therefore `EMU10-R3` is fully resolved and no unrelated Musashi code changes remain.
+- Reviewed the new `EMU10-R4` guest-GUI test narrative, four before/after SHA-256 pairs, fresh-process document-content checks, HFS checks, format coverage, eject `media=0/dirty=0/save_error=0`, and the test's temporary-only insertion accommodation. The existing ROM `_Write`/`CtlFormat` tests and transactional disk code from prior review remain unchanged. **The developer's tests are substantial and satisfy the missing GUI-integration evidence requirement for technical review.**
+- **Evidence boundary:** this reviewer read the test description and hash records from the repository; the screenshots/traces live in a developer-local `/tmp` path and were not accessible for independent examination, and test commands were not rerun here. Accordingly R4 is `VERIFIED` as **developer-reported and reviewer-assessed**, not as an independently reproduced GUI session. Owner-run manual writing/formatting is still `NOT TESTED`; this is an owner acceptance choice, not a further code correction.
+- **Code review disposition:** approve corrected implementation commit `c5488bd` and R3/R4 follow-up commit `ab01c77`. Superseded error-bearing commits remain in the history. No new in-scope IWM defect was identified, and **no further developer changes are requested**. Retain ticket `REVIEW` until the project owner explicitly accepts the release/merge; do not mark `RESOLVED` or `CLOSED` solely on reviewer approval.
 
 **Notes**
 
@@ -148,6 +155,8 @@ The four ejects reported `media=0`, `dirty=0` and `save_error=0`. Raw files stay
 - **2026-11-20 — EMU10-R4 developer verification and status change:** Ran real guest file creation, Save, Finder shutdown and fresh-process read-back on both disposable formats. From SCSI Finder, used the temporary insertion probe to exercise two-sided erase, eject and remount for both formats. Recorded exact text, image hashes and full-track trace coverage above. Developer guest UI tests **PASSED**. Owner-run GUI verification remains **NOT TESTED**. Returned `IN_PROGRESS` → `REVIEW` for owner review of the correction and evidence.
 - **2026-11-20 — Local rework commit and handoff:** Committed the two Musashi restorations and the guest UI evidence at `ab01c773e844918a00a5ee502710127aabfb2e28` on `docs-iwm-transactional-write`. Recorded the commit as `UNREVIEWED` and retained the ticket in `REVIEW` for owner sign-off.
 
+- **2026-11-20 — Second review and code approval:** Reviewed `ab01c77`, verified Musashi blobs identical to `main` and examined developer's authentic GUI file-save/format and persistent-reopen evidence. Marked `EMU10-R3` and `EMU10-R4` verified for technical review. Approved `c5488bd` and `ab01c77`; historical `4fffe22` and `65181de` remain recorded as superseded. No further implementation changes requested. Owner's own GUI write/format run remains optional **NOT TESTED**; the ticket remains `REVIEW` pending explicit owner final acceptance/PR/merge. No new emulator tests were run during this reviewer session.
+
 **Proposed Change**
 
 Implement the approved [Document 05](../../05-iwm-write-implementation.md) contract for timed IWM writes and a temporary circular-track candidate. Validate and swap on successful `Q7L`, discard incomplete candidates, and checkpoint dirty tracks separately on step, eject or exit. Checkpoint raw sector data even when the guest writes tags. Save data and tags to tagged DiskCopy. Verify original-ROM read, write, format gap retry and reopen for both layouts. Report host validation and persistence errors separately from IWM underruns. Record local commits and test evidence for owner review. STM32-only versus ATF1508 physical implementation remains future scope.
@@ -156,10 +165,10 @@ Implement the approved [Document 05](../../05-iwm-write-implementation.md) contr
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `docs-iwm-transactional-write` | `4fffe22` | `CHANGES_REQUESTED` | Implement and verify timed IWM writes, transactional track capture, image checkpoints and original-ROM formatting. Raw checkpoint policy revised in `EMU10-R2`. |
-| `docs-iwm-transactional-write` | `c5488bd` | `IN_REVIEW` | Save raw sectors from guest writes carrying tags and verify raw Finder startup, read-back and persistence under `EMU10-R2`. |
-| `docs-iwm-transactional-write` | `65181de` | `CHANGES_REQUESTED` | Comment out Musashi variable declarations, including the optional trap callback argument identified by `EMU10-R3`. |
-| `docs-iwm-transactional-write` | `ab01c77` | `UNREVIEWED` | Restore the Musashi baseline for `EMU10-R3` and record the raw and tagged guest UI evidence for `EMU10-R4`. |
+| `docs-iwm-transactional-write` | `4fffe22` | `SUPERSEDED` | Implement and verify timed IWM writes, transactional track capture, image checkpoints and original-ROM formatting. Raw checkpoint policy revised in `EMU10-R2`. |
+| `docs-iwm-transactional-write` | `c5488bd` | `APPROVED` | Save raw sectors from guest writes carrying tags and verify raw Finder startup, read-back and persistence under `EMU10-R2`. |
+| `docs-iwm-transactional-write` | `65181de` | `SUPERSEDED` | Comment out Musashi variable declarations, including the optional trap callback argument identified by `EMU10-R3`. |
+| `docs-iwm-transactional-write` | `ab01c77` | `APPROVED` | Restore the Musashi baseline for `EMU10-R3` and record the raw and tagged guest UI evidence for `EMU10-R4`. |
 
 **Resolution Description**
 
