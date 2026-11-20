@@ -398,7 +398,7 @@ bool cmd_value = PH2;
 | 0 | `DIRTN` | Set direction latch: `0` step in (+1 track); `1` step out (−1 track). **Does not move the head** |
 | 2 | `STEP` | Written value `0` requests **one** step in latched direction; `/STEP` becomes busy and later ready |
 | 4 | `MOTORON` | `0` starts spindle; `1` stops spindle |
-| 6 | `EJECT` | `1` requests eject (original ROM holds an extended strobe/command); maintain correct disk-in-place state, and in Phase 2 flush before removal |
+| 6 | `EJECT` | `1` requests eject. The **800K new-interface** ROM uses a short PH3 strobe, then polls `/CSTIN` until the medium leaves; older 400K drives use a longer pulse. Distinguish request from actual removal; Phase 2 must flush dirty data before logical unmount |
 | Other | Extensions/reserved | No movement and no invented success; add only if original ROM uses them |
 
 **A change of PH0, PH1, PH2, VIA SEL or IWM Drive-Sel alone does not move the head**. One valid **rising** PH3 edge triggers at most one command; PH3 remaining high across multiple reads cannot produce multiple steps. PH3 falling ends the pulse. If no drive is enabled or present, strobing does not modify any other drive.
@@ -444,8 +444,8 @@ typedef struct {
 
 ### 12.5 Drive selection, motor, ready and tachometer
 
-- **Drive select:** `IWM_DRIVE_SEL=0` means internal `/ENBL1`; `=1` means external `/ENBL2`. `IWM_MOTOR_ON=0` deasserts both. When enabled, only the selected position responds. The ROM probes internal/external positions independently; even if Phase 1 mounts one image, maintain a coherent absent external response.
-- **Spindle:** start/stop only from Sony command index 4; a merely asserted /ENBL does not mean the spindle has already achieved speed. Model a spin-up/ready transition. A motor-off command stops delivering encoded bits and running TACH; it must not reset cylinder or silently erase the track.
+- **Drive select:** `IWM_DRIVE_SEL=0` means internal `/ENBL1`; `=1` means external `/ENBL2`. A configured IWM motor-off delay may keep the selected effective `/ENBLx` asserted **after** the Motor-Off soft switch, until its timer expires; reasserting Motor-On before expiry cancels that pending disable. When enabled, only the selected position responds. The ROM probes internal/external positions independently; even if Phase 1 mounts one image, maintain a coherent absent external response.
+- **Spindle:** Sony command index 4 starts/stops the motor; **actual loss of effective `/ENBLx` also powers down the Sony spindle**. A Motor-Off soft switch with a pending delayed-off timer is *not yet* loss of /ENBL. At genuine disable, stop TACH and RDDATA and invalidate stale readiness without ejecting the media, moving the head or clearing image data. Re-enable alone does **not** restart the spindle; the ROM must send Sony MOTORON=0 again. See §12.10 and `EMU3-R6`.
 - **READY:** Sony read index 13 is **active low**. It should reflect a present installed drive and its current motor/settling state, not a hardcoded permanent ready bit. The ROM's `Sony_WaitReady` checks it after initial wait and then polls.
 - **TACH:** Sony index 7 is a **time-derived periodic level**, nominally 60 pulses per revolution; the ROM's `Sony_FigTrkSpd` measures 15 pulses with **VIA Timer 2**, including timeout. Do not toggle TACH merely on each read. Use a documented speed-zone table and verify the ROM-observed period; nominal published speeds are around 394, 429, 472, 525 and 590 RPM, with discrepancies for the innermost band across references. Treat those as calibration inputs, not exact proof.
 - **VIA Timer 2 integration:** if the unmodified-ROM path uses `Sony_FigTrkSpd`, T2 count and IFR timeout must advance on the same virtual timeline. Avoid faking the ROM's return value or polling result. The ROM's other VBL/Time Manager motor/seek waits may also require existing VIA work.
@@ -508,7 +508,7 @@ Emit a compact trace of: **ROM PC, elapsed C8M clock, IWM address/soft-switch, Q
 | --- | --- | --- |
 | Control-line independence | PH0–PH2 and VIA PA5 changes while PH3 low | No step, no direction/motor command; correctly selected sense register |
 | PH3 edge | PH3H→PH3L once, PH3 held high, then repeated after low | **One** command per rising edge, never one per read or per PH value change |
-| Enable logic | Internal/external select, Motor-On off/on | Exactly the appropriate /ENBLx active; absent external cannot respond as a present HD20 or disk |
+| Enable logic | Internal/external select, Motor-On off/on, delayed timer expiry/cancel, reset | Correct effective /ENBLx; no premature spindle stop during pending timer; genuine disable powers down Sony spindle but retains cylinder/media; no absent-drive cross-talk |
 | Direction | Strobe DIRTN=0/1 | Direction changes; cylinder does not |
 | Single step | Strobe STEP=0, advance virtual time | One cylinder change, busy→ready and /TK0 correct |
 | Track boundaries | Step out at 0 and inward at 79 | Cylinder clamped, never wraps, no wrong-side change |
@@ -527,3 +527,70 @@ All checks must be deterministic under the **virtual clock**, not sleeps or inst
 Do **not** implement a complete Apple II IWM, 5.25-inch phase-stepper, high-density SWIM/MFM, analogue magnetic flux, physical WRDATA NRZI/RDDATA pulses, STM32 peripherals, ATF1508 RTL, the 400K PWM speed loop or an HD20 daisy-chain controller as part of the Phase-1 IWM. We need only the subset of **Mac Plus 800K IWM and Sony drive behaviour exercised by the original ROM**. Unused register values or modes should be logged and justified, not blindly hardcoded to “ready”.
 
 The exact IWM read-latch 14-FCLK rearm condition, Musashi intra-instruction timestamping, spin-up and step completion delay, innermost-zone tach period, 800K interface/handshake sense polarity, VIA timer use and logical `.dsk` ordering require **ROM-trace/specification validation**. These are defined verification work, **not** permissions to bypass ROM checks. Phase 2 must preserve the same drive-control state machine and add timed write transmission, bit-positioned circular overwrites, dirty-track flush on a cylinder/side/lifecycle transition and sector decoding as detailed in §6.
+
+### 12.10 Disk lifecycle: insertion, eject and drive power (software and future STM32)
+
+**Purpose:** establish what the Macintosh sees when a virtual 800K disk is ejected or inserted, and preserve an implementation-independent lifecycle for the planned STM32 cartridge firmware. The motor enable correction in [`12.5](#125-drive-selection-motor-ready-and-tachometer) is required in Phase 1; **interactive insertion/eject hardware is not**.
+
+#### 12.10.1 Three independent facts
+
+- **Drive installed:** a Sony 800K-compatible drive or emulator is present in the selected internal/external slot. Sony read index **14** reports the installed drive (active-low). This does **not** mean there is a disk.
+- **Media inserted:** a specific image/cartridge is accepted and present; Sony read index **1**, `/CSTIN`, is **0 when inserted**, **1 when empty**. Inserted media has an identity and geometry (e.g. 800K, its tags and currently encoded tracks).
+- **Spindle running / ready:** distinct from presence. Sony read index **4**, `/MOTORON`, reports motor state; index **13**, `/READY`, is active-low and only reports ready when the disk is spinning/settled and the drive can supply data.
+
+A drive may be empty but installed, or inserted but not spinning. No PH0–PH3 address change, IWM motor selection or periodic status read is a command to insert a disk.
+
+#### 12.10.2 Required state and guest-visible effects
+
+| Event | Guest-observable condition | Drive/media backend action |
+| --- | --- | --- |
+| Installed drive, empty | Drive-present still active; `/CSTIN=1`; `/READY=1`; no RDDATA | Retain the drive hardware model; no phantom medium |
+| **External insertion** (real cartridge detected or host explicitly mounts image) | `/CSTIN` becomes **0 only after acceptance**; motor initially off, not yet ready | Validate disk format/metadata, establish **new medium identity**, invalidate previous read latch/track cache and prepare 800K GCR data/tags |
+| Sony MOTORON=0 command | Motor sense on, initially `/READY=1` | Start spindle and a spin-up deadline; after ready serve read data/TACH for current cylinder and side |
+| EJECT command **6**, value **1**, PH3 rising | **Eject requested**, not proof of medium absence | Trigger exactly one eject action. 800K ROM pulses PH3 briefly then polls `/CSTIN` to learn when removal completed |
+| **Completed removal** (physical cartridge out or host explicitly unmounts) | `/CSTIN=1`, `/READY=1`, RDDATA/TACH inactive; *drive-present unchanged* | Stop spindle, invalidate old read latch and track state, detach old medium; never expose stale sectors |
+| **Reinsertion** of same/different medium | `/CSTIN=0` only after a fresh validated insertion event | Create a fresh medium instance/track mapping; do not reuse old disk contents |
+
+**Eject timing:** The [original Plus ROM Sony control routine](https://github.com/jonathanschilling/mac_rom/blob/main/plus/resources/res_drvr_sony.s) contains both ⌁SONY_CTL_EJECT⌁ and ⌁SONY_NEWDRVEJECT⌁. For **new-interface 800K**, PH3 is pulsed briefly and the driver waits, polling ⌁/CSTIN⌁ for the medium to depart (with a timeout); for **old-interface 400K**, the eject pulse is much longer. Do not emulate 400K eject timing in the 800K replacement.
+
+The **current Phase-1 disk backend immediately sets inserted=false when the eject command is strobed**. This is an acceptable simplified virtual-eject completion so long as sense/readiness/read data become consistent. It **must not** be interpreted as a specification that an actual mechanism removes a cartridge instantaneously.
+
+#### 12.10.3 Effective /ENBL transition is NOT media eject
+
+- The IWM Motor-On latch and Drive-Sel produce effective `/ENBL1` or `/ENBL2`; the IWM's off-delay mode can **keep enable asserted after a Motor-Off request**. Only an effective enable-falling edge powers down the selected Sony drive under this rule.
+- **On enable loss:** spindle and running TACH cease, RDDATA ceases and prior ready/spin-up eligibility is cleared. The media remains **inserted**; its image, tags, write-protection state, cylinder, head and track data remain valid. Do not emit a disk-removal signal.
+- **On re-enable:** the drive interface becomes addressable, with Sony spindle **off**. Do not automatically replay a previous motor-on command or claim ready without a new start/spin-up.
+- **On Drive-Sel change:** notify the old drive of its lost /ENBL and let it power down; the new drive has independent spindle/media state. Selection is not physical eject.
+- **At motor-off timeout:** deliver a disable event at the actual **virtual C8M deadline**, not at the earlier Motor-Off soft-switch request. Re-enabling before expiry cancels the event and preserves the active spindle.
+- **On reset:** when IWM enable drops, stop the spindle but **retain inserted medium and cylinder**; Phase-2 pending writes must never be discarded merely because the CPU resets.
+
+This is the approved developer correction [PLUS-EMU-0003 / EMU3-R6](tasks/db/PLUS-EMU-0003.md), and is part of the minimum software-visible Sony 800K behaviour. It needs no simulation of head-motor windings or physical eject coils.
+
+#### 12.10.4 Insertion comes from the media backend
+
+**The Macintosh does not transmit a PH0–PH3 disk-insert command.** A real Sony drive detects media insertion; a virtual disk backend must instead receive an **external image mount** event. Future STM32 firmware should use whichever reliable cartridge-presence mechanism is selected (mechanical switch, detect contact, or other validated means) and confirm that the image/track metadata can be read before advertising `/CSTIN=0`.
+
+- Treat detection and acceptance as distinct: debounce/settle the physical signal as necessary, reject unsupported/corrupt images, and never carry encoded bits or tags from a previous medium into a new one.
+- Do **not** infer insertion from IWM /ENBL, Motor-On, RDDATA, the Mac's PWM line or a repeated SENSE poll.
+- The inserted disk remains present while the Mac powers its drive down or switches drive selection.
+- Phase 1 loads an image at startup. After a guest eject it may remain empty for the rest of that session. **Host hot-swapping or reinsertion without restarting uMac is not a new Phase-1 requirement**; the interface is documented to support later implementation.
+
+#### 12.10.5 STM32 firmware and Phase-2 persistence
+
+Use separate **drive control**, **media presence/identity** and **track stream** state; whether the physical design is STM32-only or STM32+ATF1508 remains an **open architecture decision**. An optional CPLD handles selected pin timing, not the logical decision that a cartridge is inserted or saved.
+
+~~~c
+// Conceptual interface only; NOT a prescribed Phase-1 API.
+bool media_insert(drive_id drive, media_handle candidate, uint64_t time);
+void media_request_eject(drive_id drive, uint64_t time);
+void media_removed(drive_id drive, uint64_t time);
+void drive_set_enabled(drive_id drive, bool enabled, uint64_t time);
+~~~
+
+- Guest **EJECT request** and **completed physical release** must be distinguishable. If no mechanical actuator exists, firmware may require safe user removal while honoring the ROM's bounded eject wait. Do not claim the cartridge is physically absent while still actively using it.
+- **Phase 2:** before a normal logical unmount, flush **only dirty** circular tracks, decode/check sector data and 12-byte tags and persist to image/SPI flash. If decoding or saving fails, do not clear dirty state or claim durability. Unexpected physical removal can make persistence impossible: stop new accesses, retain a recoverable RAM buffer if possible and report an error rather than pretending the save completed.
+- Reinsertion must validate medium identity, 800K geometry and storage metadata before exposing disk-present status. An empty or unreadable cartridge is not a writable Macintosh floppy.
+- The host virtual model uses monotonically advancing C8M ticks. STM32 firmware additionally must respond to **real external media-presence events**; these cannot be inferred from the nominal 489,600 bit/s stream. Mac PWM is not a disk-presence or write bit-clock signal.
+- Test guest eject with delayed physical removal, immediate virtual unmount, insertion of same and different media, empty drive, drive-enable loss without eject, removal while spindle runs, dirty-buffer save failure/power loss, and correct `/CSTIN`, `/READY`, motor/TACH, cylinder, sector/tag integrity and ROM remount detection.
+
+**Boundary:** This document specifies future physical media lifecycle behaviour so STM32 firmware can be designed properly. **Only the enable-loss motor correction (EMU3-R6) is requested of the current Phase-1 developer**; do not enlarge the scope to user-interface hot swap, physical cartridge mechanics or write persistence.
