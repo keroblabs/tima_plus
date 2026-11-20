@@ -146,6 +146,7 @@ The four ejects reported `media=0`, `dirty=0` and `save_error=0`. Raw files stay
 - **2026-11-20 — Review follow-up and status change:** Started the requested `EMU10-R3` correction and `EMU10-R4` guest UI verification on `docs-iwm-transactional-write` at `7cef542`. Moved `REVIEW` → `IN_PROGRESS`. A syntax-only Musashi compile with `M68K_TRAP_HAS_CALLBACK=1` reproduced the undeclared `t` in `m68ki_exception_trapN()`. Commit `65181de` accounts for the entire Musashi diff from `0e5f8dd`.
 - **2026-11-20 — EMU10-R3 correction and verification:** Restored the Musashi source from before the warning cleanup. The callback compile, source comparisons, standalone `make prepare` and `make -j4`, and Release and sanitizer regressions passed. Recorded the trap-logging compile failure present in the baseline. Marked `EMU10-R3` `VERIFIED`.
 - **2026-11-20 — EMU10-R4 developer verification and status change:** Ran real guest file creation, Save, Finder shutdown and fresh-process read-back on both disposable formats. From SCSI Finder, used the temporary insertion probe to exercise two-sided erase, eject and remount for both formats. Recorded exact text, image hashes and full-track trace coverage above. Developer guest UI tests **PASSED**. Owner-run GUI verification remains **NOT TESTED**. Returned `IN_PROGRESS` → `REVIEW` for owner review of the correction and evidence.
+- **2026-11-20 — Local rework commit and handoff:** Committed the two Musashi restorations and the guest UI evidence at `ab01c773e844918a00a5ee502710127aabfb2e28` on `docs-iwm-transactional-write`. Recorded the commit as `UNREVIEWED` and retained the ticket in `REVIEW` for owner sign-off.
 
 **Proposed Change**
 
@@ -158,6 +159,7 @@ Implement the approved [Document 05](../../05-iwm-write-implementation.md) contr
 | `docs-iwm-transactional-write` | `4fffe22` | `CHANGES_REQUESTED` | Implement and verify timed IWM writes, transactional track capture, image checkpoints and original-ROM formatting. Raw checkpoint policy revised in `EMU10-R2`. |
 | `docs-iwm-transactional-write` | `c5488bd` | `IN_REVIEW` | Save raw sectors from guest writes carrying tags and verify raw Finder startup, read-back and persistence under `EMU10-R2`. |
 | `docs-iwm-transactional-write` | `65181de` | `CHANGES_REQUESTED` | Comment out Musashi variable declarations, including the optional trap callback argument identified by `EMU10-R3`. |
+| `docs-iwm-transactional-write` | `ab01c77` | `UNREVIEWED` | Restore the Musashi baseline for `EMU10-R3` and record the raw and tagged guest UI evidence for `EMU10-R4`. |
 
 **Resolution Description**
 
