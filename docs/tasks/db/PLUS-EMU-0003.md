@@ -74,6 +74,25 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 - System 6.0.8 System Tools, 819,200 raw bytes, SHA-256 `4089f6ed6a39987a0f56207c25936bc61d1e7bcd0c969bbe92f3f6a28cfa7f50`. The data came from Apple's 800K disk 1 of 4. The Disk Copy data checksum `4027c0be` matched before extracting the raw logical sectors. [Apple System 6.0.8 distribution](https://download.info.apple.com/Apple_Support_Area/Apple_Software_Updates/English-North_American/Macintosh/System/Older_System/System_6.0.x/SSW_6.0.8-800k_Disk1of4.sea.bin)
 - The IWM uses Apple's 14-FCLK acknowledgement timing and the Plus connection of FCLK to C8M. The track encoder follows the ROM's interleave, tag and checksum layout. [Apple IWM Rev. 19, data separator](https://www.brutaldeluxe.fr/documentation/iwm/apple2_IWM_Spec_Rev19_1982.pdf), [Apple Guide to the Macintosh Family Hardware, figure 9-5](https://vintageapple.org/inside_o/pdf/Guide_to_Macintosh_Family_Hardware_2nd_Edition_1990.pdf), [Apple SWIM reference, pp. 5–6 and 10–12](https://mirrors.apple2.org.za/www.bitsavers.org/pdf/apple/disk/sony/SWIM_Chip_Users_Ref_198801.pdf), [Apple TA45016](https://savagetaylor.com/til/TA45016.html)
 
+### Desktop startup performance
+
+The SDL loop added in `427e0d2` converts virtual C8M ticks into a host deadline and calls `SDL_Delay` after each approximately 5 ms slice. This caps desktop execution at one emulated second per wall-clock second on a sufficiently fast host. Baseline `9c97aeb` ran CPU slices as fast as the host could execute them and presented frames on host time. The current loop also presents one frame per guest VBL, so bypassing the sleep alone still presents every emulated frame during a fast boot. [SDL loop](../../../devel/umac/src/unix_main.c), [C8M run loop](../../../devel/umac/src/main.c)
+
+All comparisons used a 4 MiB Debug build, fresh PRAM, SDL's dummy video driver with the software renderer, and tracing disabled. The SCSI case used the ROM and `HD10_512.hda` from the VS Code launch configuration, with an empty floppy drive. The floppy case used the 819,200-byte data portion of `plus-system.dsk`, verified against its Disk Copy checksum `6c542b16`. Its raw SHA-256 was `89c76e5f6b4fd24560933b0d85b0fa99aa70f11c1a92c3e8b4c1771ad5db6435`. The ROM and both media inputs retained their hashes.
+
+Launch with `SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software` from a fresh working directory for each run, and use `-P test.pram`. For SCSI pass `-r rom.bin -s HD10_512.hda` with absolute input paths. For floppy pass the same ROM and `-d` with the extracted raw image. Measure wall time from launch to the first observation of the Pascal string `Finder` in `CurApName` at RAM offset `$910`. The measurements sampled `ram.bin` every 5 ms.
+
+| Frontend configuration | SCSI only | 800K floppy |
+| --- | ---: | ---: |
+| Baseline `9c97aeb`, ROM patched at load | 0.561 s | 0.350 s |
+| Current Debug, unmodified ROM and stock SDL loop | 43.505 s | 36.200 s |
+| Current Debug core and ROM, host sleep bypassed in temporary SDL build | 3.521 s | 2.959 s |
+| Current Debug core and ROM, host sleep bypassed and presentation capped at about 60 frames per host second in temporary SDL build | 0.599 s | 0.458 s |
+
+- Instrumenting the paced frontend measured 38.527 s in `SDL_Delay` on the SCSI boot and 32.239 s on the floppy boot, about 89% of elapsed time in each case. The ROM completed RAM initialization at 30.432 virtual seconds in both cases. A ROM PC sample during that interval showed repeated execution of the memory-test loops around `$400E82` and `$400E96`.
+- The A/B builds used the same CPU, VIA and IWM core. Every variant reached the first Finder marker at the same virtual timestamp for its medium, 43.502 s for SCSI and 36.198 s for floppy. With the sleep bypassed, drawing consumed 2.973 s for 2,616 SCSI boot frames and 2.519 s for 2,176 floppy boot frames. Limiting host presentation reduced the frame counts to 36 and 27 while still delivering guest VBL events.
+- The release headless ROM test with the same extracted floppy completed in 0.512 s wall time. It booted to Finder, matched all eleven sector probes, rejected the write, and rebooted after recalibrating from cylinder 79. Waypipe presentation and interactive latency were **NOT TESTED** in this investigation.
+
 ### Review Findings
 
 | Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
@@ -81,6 +100,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 | `EMU3-R1` | `CORRECTION_REQUIRED` | After an explicit reset, the ROM at `$4007D8` waited for system ticks. Musashi cleared its IRQ input while VIA held a pre-reset interrupt. | Reset VIA registers and IRQ state on the current C8M timeline. Boot the original ROM from cylinder 79 and verify it returns to Finder. | `VERIFIED` |
 | `EMU3-R2` | `FUTURE_SCOPE` | Bus phase, spindle spin-up, cylinder settling and TACH use deterministic software timing. Physical measurements were **NOT TESTED**. | Validate electrical timing and mechanics as part of [PLUS-DEV-0008](../../01-development-roadmap.md#plus-dev-0008--validate-the-physical-floppy-replacement). The software boot gate is covered by `EMU3-A5`. | `DEFERRED` |
 | `EMU3-R3` | `CORRECTION_REQUIRED` | UBSan stopped the original System Software boot in Musashi's 32-bit `BCLR` when a signed mask shifted into bit 31. | Use unsigned masks for the 32-bit register bit operations. Repeat the boot and regression suite under ASan and UBSan. | `VERIFIED` |
+| `EMU3-R4` | `CORRECTION_REQUIRED` | The new SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Agree on the desktop speed policy. Measure comparable startup throughput with the same media, confirm presentation cadence, and verify original-ROM IWM boot and the SCSI, RTC/PRAM and input regressions. | `OPEN` |
 
 **Notes**
 
@@ -95,16 +115,20 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 - **2026-11-19 — Build and Coexistence Tests:** All ten CTest cases passed at 1 MiB and 4 MiB of RAM. The standalone Make build linked and exposed the SDL CLI. With the 800K floppy and the read-only `320_32MB_drive.hda` both attached, System 6.0.8 booted and its volume queue contained `System Tools` and `3.2 32MB (D)`. The hard-disk SHA-256 stayed `fd03fdc74308848200c18d4690ef2db8159df7c650255e826ab56a3779236481`.
 - **2026-11-19 — Sanitizer Tests:** Corrected `EMU3-R3` in the Musashi opcode templates. All ten CTest cases then passed under ASan and UBSan with `halt_on_error=1` for UBSan. Leak detection was disabled because LeakSanitizer could not attach in the sandbox.
 - **2026-11-19 — Verification and Status Change:** The SDL loader rejected a 1.44 MB floppy and a corrupted V3 ROM before creating RAM or PRAM output. The implementation and tests are in local commit `427e0d2`. All six acceptance checks have developer evidence. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
+- **2026-11-20 — Performance investigation and review:** Reproduced the owner-reported slowness with the current SCSI-only launch inputs and an 800K floppy. The controlled frontend comparison attributes the slowdown to host pacing and confirms the additional cost of drawing every guest frame during accelerated boot. Added `EMU3-R4` and marked `427e0d2` `CHANGES_REQUESTED`. The ticket stays in `REVIEW` pending agreement on the desktop speed policy. Diagnostic changes were confined to temporary builds.
+- **2026-11-20 — Regression retest:** All ten existing CTest cases passed in the Release build, including the original-ROM floppy boot and SCSI Manager checks.
 
 **Proposed Change**
 
 Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. Load the original ROM and synthesize circular GCR tracks from read-only raw 800K sectors. Retain the write stub for Phase 1 and review the implementation and verification against the acceptance matrix.
 
+For `EMU3-R4`, restore fast desktop execution or expose a choice of host pacing. Schedule host presentation independently of guest VBL. Derive guest VBL, VIA and IWM timing from C8M in each host speed mode.
+
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `plus-emu-0003-iwm` | `427e0d2` | `UNREVIEWED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
+| `plus-emu-0003-iwm` | `427e0d2` | `CHANGES_REQUESTED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
 
 **Resolution Description**
 
