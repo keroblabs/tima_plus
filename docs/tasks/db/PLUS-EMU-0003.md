@@ -1,7 +1,7 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `IN_PROGRESS`
+**Status:** `REVIEW`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
@@ -217,6 +217,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s devel/umac/tests -p 't
 - **2026-11-20 — Code Review / Changes Requested / Status Change:** Reviewed `db1d257b5bc8f861e2fae176003253667f88d89f` after developer and owner boot/SCSI/RTC checks. New `EMU3-R6`: effective /ENBLx loss does not stop Sony spindle. Owner approved the bounded correction, returning `REVIEW` → `IN_PROGRESS`. Added exact timing, reset, drive-switch and original-ROM regression acceptance. Eject/insertion is separately documented in 04 for later STM32 design, not added to Phase-1 code. No code changes or new tests in this documentation commit.
 - **2026-11-20 — Rework:** Reproduced the stale spindle with the generated fixture linked to the pre-fix core at `b65729c`. The IWM now compares effective enable outputs when applying switches, expiring the off-delay or resetting. The disk backend advances to the transition tick and cancels any step still pending when enable is lost. Controller initialization is separate from live reset so reset can process a pending timer before clearing IWM state.
 - **2026-11-20 — Verification:** Added `iwm_motor_enable` and reset assertions in the original-ROM test. Recorded the deterministic trace, test commands and raw/tagged boot and regression results above. Marked `EMU3-R6` `VERIFIED`.
+- **2026-11-20 — Status Change:** Recorded the implementation and tests in local commit `a02b4ef72c02361f7fc68ef20e65a3c7691b2527`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 
 **Proposed Change**
 
@@ -234,6 +235,7 @@ For **EMU3-R6**, implement and test the precise effective-enable transition cont
 | --- | --- | --- | --- |
 | `plus-emu-0003-iwm` | `427e0d2` | `CHANGES_REQUESTED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
 | `plus-emu-0003-iwm` | `eb4322d` | `CHANGES_REQUESTED` | Tag/media and performance work reviewed; follow-up motor-enable correction `EMU3-R6` pending. |
+| `plus-emu-0003-iwm` | `a02b4ef` | `UNREVIEWED` | Correct effective Sony drive enable timing and verify motor-off, drive selection and reset. |
 
 **Resolution Description**
 
