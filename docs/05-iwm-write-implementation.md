@@ -4,7 +4,7 @@
 **Date:** 20 November 2026  
 **Ticket:** [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) — OPEN  
 **Completed prerequisite:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) — CLOSED, [PR #3](https://github.com/keroblabs/tima_plus/pull/3) merged  
-**Architecture:** [04 — IWM Emulation](04-iwm-emulation.md), especially ``3.2, 4.3, 6.2 and 12  
+**Architecture:** [04 — IWM Emulation](04-iwm-emulation.md), especially §§3.2, 4.3, 6.2 and 12  
 **Target:** Macintosh Plus V3 **unmodified ROM** and original `.Sony` driver; Sony double-sided **800K GCR**, not a complete IWM or SuperDrive
 
 ## 1. Scope and actual code baseline
