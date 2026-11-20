@@ -122,7 +122,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 | `EMU3-R4` | `CORRECTION_REQUIRED` | The SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Verify comparable startup throughput, host presentation and guest clock rates, original-ROM IWM boot, SCSI, RTC/PRAM and input. | `VERIFIED` |
 | `EMU3-R5` | `CORRECTION_REQUIRED` | The SDL loader rejected `devel/umac/plus-system.image` because the disk backend required exactly 819,200 bytes. The reported 838,484-byte file has a DiskCopy 4.2 header, 1,600 data sectors and 1,600 sector tags. | Load the image directly, preserve all tags through GCR encoding, reject malformed containers, and test raw and tagged original-ROM boot and media protection. | `VERIFIED` |
 | `EMU3-R6` | `CORRECTION_REQUIRED` | Before the correction, inactive /ENBL left the Sony spindle running and the next selection reported motor-on. The generated fixture reproduced the active TACH and ready state with both enables inactive. | Propagate effective per-drive enable transitions at their exact C8M ticks. Verify immediate and delayed motor-off, cancellation, drive selection, reset and original-ROM boot. | `APPROVED` |
-| `EMU3-R7` | `VERIFICATION_REQUIRED` | The owner reported floppy startup with both volumes mounted, followed by SCSI startup and an empty internal drive after Finder's Shut Down. | Identify the startup disk and mounted volumes, trace the guest's eject and compare with a direct hardware reset and a fresh launch. | `VERIFIED` |
+| `EMU3-R7` | `VERIFICATION_REQUIRED` | The owner reported floppy startup with both volumes mounted, followed by SCSI startup and an empty internal drive after Finder's Shut Down. | Identify the startup disk and mounted volumes, trace guest eject, and check direct reset, fresh launch and startup with a data-only floppy. | `VERIFIED` |
 
 ### EMU3-R6 — Motor-enable correction: developer handoff
 
@@ -202,6 +202,7 @@ Reproduced with the 4 MiB Debug SDL build at `ae6ca87`, the unmodified Plus V3 R
 | Select Finder 5.3 **Special → Shut Down** | The same emulator process rebooted from the SCSI disk (driver `-34`). The About dialog showed System 6.0.8 and Finder 6.1.8. | `Macintosh` |
 | Call `umac_reset()` in a separate two-disk run with the floppy still inserted | Internal `.Sony` (driver `-5`). The drive reported the medium present immediately after reset. | `System Tools` and `Macintosh` |
 | Relaunch with both arguments and a copy of the PRAM saved after the SCSI reboot | Internal `.Sony` (driver `-5`). The new desktop process inserted the floppy from `-d`. | `System Tools` and `Macintosh` |
+| Launch with a formatted 800K data-only floppy and the same SCSI disk | The ROM checked and ejected the floppy, then booted the SCSI disk (driver `-34`). | `Macintosh` |
 
 The trace after releasing the mouse on **Shut Down** establishes the order of events.
 
@@ -227,6 +228,12 @@ probe_dir=$(mktemp -d /tmp/tima-plus-r7.XXXXXX)
 )
 ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 ```
+
+#### Cold boot with a data-only floppy
+
+The Plus ROM checks the internal floppy first and falls back to a bootable SCSI disk when it finds no startup system on the floppy. Verified with the same Plus V3 ROM and `HD10_512.hda`. The cold boot used fresh RAM and PRAM and substituted `-d /tmp/tima-plus-r7-data.i5mAnu/data-only.image` in the launch command above. The temporary fixture was a formatted 800K HFS volume named `Data Only` with a single `Read Me` text file, empty boot blocks and zero-filled sector tags in an 838,484-byte DiskCopy 4.2 container. Its catalog and text file were read back with machfs 1.3. Its SHA-256 was `0fa1db27aa7c148b468ddf2b53633f311942d425b5e8311573bb1948e022b96a`. [Apple Technical Info Library 1977, Macintosh startup order](https://savagetaylor.com/TIL/TIL01977.pdf)
+
+In SDL's dummy video driver with the software renderer, the trace showed the ROM reading the floppy while `media=1`, then issuing Sony EJECT (`cmd=6 ca2=1` at PC `$417FDA`, C8M tick 351,153,208). The following /CSTIN poll returned `$BF` with `media=0`. Finder reached the desktop with SCSI startup driver `-34` and only the `Macintosh` volume mounted. The ROM, the fixture and both original images retained their SHA-256 values.
 
 **Notes**
 
@@ -256,6 +263,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 - **2026-11-20 — Verification:** Added `iwm_motor_enable` and reset assertions in the original-ROM test. Recorded the deterministic trace, test commands and raw/tagged boot and regression results above. Marked `EMU3-R6` `VERIFIED`.
 - **2026-11-20 — Status Change:** Recorded the implementation and tests in local commit `a02b4ef72c02361f7fc68ef20e65a3c7691b2527`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 - **2026-11-20 — Verification:** Reproduced the dual-media startup and Finder Shut Down sequence. `EMU3-R7` is `VERIFIED` as expected eject and restart behaviour for Finder 5.3. The trace shows a guest eject before ROM restart, and the hardware-reset control retained both volumes. The 13-test regression suite passed. The ticket stays in `REVIEW`.
+- **2026-11-20 — Verification:** Checked the owner's data-only floppy follow-up. The original Plus ROM read and ejected the formatted HFS floppy during cold boot, then started from SCSI. Recorded the fixture, trace and Finder volume check under `EMU3-R7`.
 
 - **2026-11-20 — Independent Code Review / Approval:** Reviewer inspected [`a02b4ef`](https://github.com/keroblabs/tima_plus/commit/a02b4ef72c02361f7fc68ef20e65a3c7691b2527) and the recorded R6-T1–R6-T6 assertions. Approved timestamped effective /ENBL callbacks, exact cutoff before subsequent rotation, timer cancellation, drive switching, spindle stop without disk eject/cylinder loss and reset semantics. Developer recorded 13/13 Release tests for raw and tagged 800K images, 13/13 ASan/UBSan, original-ROM Finder boot and SCSI/RTC/PRAM checks; **reviewer did not independently execute tests**. No blocking finding. Marked `EMU3-R6` and commit `a02b4ef` `APPROVED`; `PLUS-EMU-0003` `REVIEW` → `RESOLVED`, awaiting project-owner final review/merge. The mid-step cancel and immediate virtual eject are documented Phase-1 simplifications.
 
