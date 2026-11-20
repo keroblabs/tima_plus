@@ -1866,7 +1866,7 @@ static inline void m68ki_exception_trap(uint vector)
 /* Trap#n stacks a 0 frame but behaves like group2 otherwise */
 static inline void m68ki_exception_trapN(uint vector)
 {
-	//uint t = REG_IR & 0xf;
+	uint t = REG_IR & 0xf;
 #if M68K_LOG_TRAP == M68K_OPT_ON
 	M68K_DO_LOG((M68K_LOG_FILEHANDLE "%s at %08x: trap %01x (%s)\n",
 				 m68ki_cpu_names[CPU_TYPE], ADDRESS_68K(REG_PPC), t,
