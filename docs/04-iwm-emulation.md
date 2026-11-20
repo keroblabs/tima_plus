@@ -551,7 +551,7 @@ A drive may be empty but installed, or inserted but not spinning. No PH0–PH3 a
 | **Completed removal** (physical cartridge out or host explicitly unmounts) | `/CSTIN=1`, `/READY=1`, RDDATA/TACH inactive; *drive-present unchanged* | Stop spindle, invalidate old read latch and track state, detach old medium; never expose stale sectors |
 | **Reinsertion** of same/different medium | `/CSTIN=0` only after a fresh validated insertion event | Create a fresh medium instance/track mapping; do not reuse old disk contents |
 
-**Eject timing:** The [original Plus ROM Sony control routine](https://github.com/jonathanschilling/mac_rom/blob/main/plus/resources/res_drvr_sony.s) contains both ⌁SONY_CTL_EJECT⌁ and ⌁SONY_NEWDRVEJECT⌁. For **new-interface 800K**, PH3 is pulsed briefly and the driver waits, polling ⌁/CSTIN⌁ for the medium to depart (with a timeout); for **old-interface 400K**, the eject pulse is much longer. Do not emulate 400K eject timing in the 800K replacement.
+**Eject timing:** The [original Plus ROM Sony control routine](https://github.com/jonathanschilling/mac_rom/blob/main/plus/resources/res_drvr_sony.s) contains both `SONY_CTL_EJECT` and `SONY_NEWDRVEJECT`. For **new-interface 800K**, PH3 is pulsed briefly and the driver waits, polling `/CSTIN` for the medium to depart (with a timeout); for **old-interface 400K**, the eject pulse is much longer. Do not emulate 400K eject timing in the 800K replacement.
 
 The **current Phase-1 disk backend immediately sets inserted=false when the eject command is strobed**. This is an acceptable simplified virtual-eject completion so long as sense/readiness/read data become consistent. It **must not** be interpreted as a specification that an actual mechanism removes a cartridge instantaneously.
 
