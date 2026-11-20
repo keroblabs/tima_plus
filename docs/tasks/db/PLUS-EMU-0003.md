@@ -1,7 +1,7 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `REVIEW`
+**Status:** `IN_PROGRESS`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
@@ -121,6 +121,37 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 | `EMU3-R3` | `CORRECTION_REQUIRED` | UBSan stopped the original System Software boot in Musashi's 32-bit `BCLR` when a signed mask shifted into bit 31. | Use unsigned masks for the 32-bit register bit operations. Repeat the boot and regression suite under ASan and UBSan. | `VERIFIED` |
 | `EMU3-R4` | `CORRECTION_REQUIRED` | The SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Verify comparable startup throughput, host presentation and guest clock rates, original-ROM IWM boot, SCSI, RTC/PRAM and input. | `VERIFIED` |
 | `EMU3-R5` | `CORRECTION_REQUIRED` | The SDL loader rejected `devel/umac/plus-system.image` because the disk backend required exactly 819,200 bytes. The reported 838,484-byte file has a DiskCopy 4.2 header, 1,600 data sectors and 1,600 sector tags. | Load the image directly, preserve all tags through GCR encoding, reject malformed containers, and test raw and tagged original-ROM boot and media protection. | `VERIFIED` |
+| `EMU3-R6` | `CORRECTION_REQUIRED` | `iwm.c` computes /ENBLx from Motor-On, Drive-Sel and `motor_off_at`, but never notifies `disk_img.c` when the internal drive loses effective enable. Thus Sony `status.spindle` can remain running behind inactive /ENBL and report motor-on at next selection, contrary to original-ROM `Sony_DiskSelect`. | Propagate effective per-drive enable transitions, at their exact virtual ticks, into the Sony drive model. Stop spindle/readiness/TACH on real enable loss but retain medium and cylinder. Handle timer expiry/cancel, drive switch, reset and regressions (see R6 section). | `CHANGES_REQUESTED` |
+
+### EMU3-R6 — Motor-enable correction: developer handoff
+
+**Approved 2026-11-20.** Phase-1 rework on branch `plus-emu-0003-iwm`. Only motor/enable propagation, its timing and regression tests are required here. Do not implement Phase-2 writing or media hot-swap; [Document 04 `12.10](../../04-iwm-emulation.md#1210-disk-lifecycle-insertion-eject-and-drive-power-software-and-future-stm32) specifies future eject/insertion behaviour.
+
+**Reproduction:** enable internal drive, command Sony MOTORON=0, wait for ready, then deassert effective /ENBL1 (or switch selection to absent external). The current `iwm.c` has no drive-disable notification. `disk_img.c` stops the spindle only for explicit Sony motor-off/eject, so the previous spindle state survives and the next enable incorrectly reports motor already on.
+
+**Required implementation:**
+
+1. In `iwm.c`, compute *per-drive effective enables* before and after each IWM Motor-On/Drive-Sel state change. Drive select chooses /ENBL1 or /ENBL2. Note that `iwm_enabled()` remains true when the delayed motor-off timer is still pending. Notify only when an output actually changes; do not dispatch phantom commands to an absent external drive.
+2. Add a narrow call such as `disk_img_set_enabled(disk, bool enabled, uint64_t tick)` (name is illustrative). Before a disable event, advance the disk to the **exact virtual C8M tick** of the change. Keep IWM control and timer bookkeeping in `iwm.c`; Sony spindle/ready/TACH/track behaviour remains in `disk_img.c`.
+3. On genuine enabled→disabled, power down the Sony spindle, suppress active TACH and RDDATA, invalidate stale spin-up/ready eligibility and rearm the IWM read latch where the stream is lost. **Retain cylinder, side, inserted medium, write protection and disk image**; power-down is not eject. Handle any in-progress step deterministically without adding phantom steps.
+4. On disabled→enabled, the interface becomes selectable but **Sony spindle stays off** until the ROM sends Sony MOTORON=0. Then normal spin-up and /READY timing must apply. Do not rewind the circular track or reset cylinder.
+5. With IWM timer enabled, the Motor-Off soft switch schedules a future disable: **do not stop the spindle at the request**. When virtual time reaches/crosses `motor_off_at`, advance the drive to that precise tick, drop enable and stop the spindle. If Motor-On returns **before** expiry, cancel the timer without a disable event or spindle interruption. When the motor-off timer is disabled, disable is immediate.
+6. Switching Drive-Sel while enabled deasserts the old drive and asserts the new; the former powers down. On IWM/CPU reset, if enable is lost, stop the spindle but preserve the mounted disk and current cylinder. Do not regress reset/recalibration from cylinder 79.
+
+**Acceptance tests (add focused deterministic cases to `tests/test_iwm.c`):**
+
+| ID | Stimulus | Required observable result |
+| --- | --- | --- |
+| `R6-T1` | Enable internal, start Sony spindle, immediate IWM Motor-Off (timer disabled) | /ENBL1 falls immediately; motor/TACH/data stop; next enable reports motor off |
+| `R6-T2` | Motor-Off with timer enabled; sample just before and at deadline, including one long time jump | Spindle remains running while effective enable asserted; stops **at expiry**, not before |
+| `R6-T3` | Re-enable before pending deadline | No spurious enable drop, stop or new spin-up |
+| `R6-T4` | While internal is spinning, select absent external then return | Internal powers down; no cross-talk or auto-restart |
+| `R6-T5` | No-op repeated switches, CPU/IWM reset, nonzero track | No duplicate transitions/phantom seeks/eject; media/cylinder survive reset and motor is off |
+| `R6-T6` | Original unmodified-ROM boot, raw + tagged image, full existing CTest suite | Finder, tags, read-only write-protect, SCSI, RTC/PRAM, SDL speed, reset/recalibration and file hashes remain good |
+
+Record timestamped trace with IWM Motor-On, mode, Motor-Off deadline, Drive-Sel, **effective /ENBL1/2**, Sony spindle, /READY, TACH, cylinder and medium-present. Report actual test commands and pass/fail. **Developer must make a local `git commit` and report SHA; must not `git push`, open a PR or merge.**
+
+**Not part of this correction:** implementing media insertion UI, hot swapping, actuator timing or new eject mechanics. Losing /ENBLx must **never** eject the inserted medium.
 
 **Notes**
 
@@ -145,6 +176,8 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 - **2026-11-20 — Verification:** Passed 12/12 CTests in 4 MiB Release with the reported tagged image, 11/11 in 1 MiB Release with raw System Tools, and 9/9 in Debug without external assets. Passed 12/12 in 4 MiB Debug under ASan and UBSan with leak detection disabled in the sandbox. All four HFS converter tests and the standalone Make build passed. Confirmed offscreen and Wayland startup and guest timing. The ROM and media hashes matched before and after the runs. Marked `EMU3-R4` and `EMU3-R5` `VERIFIED`.
 - **2026-11-20 — Status Change:** Recorded both corrections in local commit `eb4322d3936afb16334d29ac04f023bd82b98ced`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 
+- **2026-11-20 — Code Review / Changes Requested / Status Change:** Reviewed `db1d257b5bc8f861e2fae176003253667f88d89f` after developer and owner boot/SCSI/RTC checks. New `EMU3-R6`: effective /ENBLx loss does not stop Sony spindle. Owner approved the bounded correction, returning `REVIEW` → `IN_PROGRESS`. Added exact timing, reset, drive-switch and original-ROM regression acceptance. Eject/insertion is separately documented in 04 for later STM32 design, not added to Phase-1 code. No code changes or new tests in this documentation commit.
+
 **Proposed Change**
 
 Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. Load the original ROM and synthesize circular GCR tracks from read-only 800K media. Retain the Phase 1 write stub.
@@ -153,12 +186,14 @@ For `EMU3-R4`, restore uncapped CPU execution in SDL. Use independent host deadl
 
 For `EMU3-R5`, validate Macintosh 800K DiskCopy 4.2 headers, lengths and checksums before attaching the disk. Encode each stored 12-byte tag ahead of its corresponding 512-byte sector. Use zero-filled tags for raw and tagless images. [Apple DiskCopy 4.2 format](https://nulib.com/library/FTN.e00005.htm)
 
+For **EMU3-R6**, implement and test the precise effective-enable transition contract above; maintain the existing read-only/GCR/tag architecture and original-ROM boot. The broader medium lifecycle in Document 04 is future scope, except the mandatory rule that /ENBL loss does not eject media.
+
 **Commits**
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `plus-emu-0003-iwm` | `427e0d2` | `CHANGES_REQUESTED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
-| `plus-emu-0003-iwm` | `eb4322d` | `UNREVIEWED` | Add read-only DiskCopy 4.2 and sector tags, restore desktop speed and verify both corrections. |
+| `plus-emu-0003-iwm` | `eb4322d` | `CHANGES_REQUESTED` | Tag/media and performance work reviewed; follow-up motor-enable correction `EMU3-R6` pending. |
 
 **Resolution Description**
 
