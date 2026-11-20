@@ -1,7 +1,7 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `REVIEW`
+**Status:** `RESOLVED`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
@@ -121,11 +121,11 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 | `EMU3-R3` | `CORRECTION_REQUIRED` | UBSan stopped the original System Software boot in Musashi's 32-bit `BCLR` when a signed mask shifted into bit 31. | Use unsigned masks for the 32-bit register bit operations. Repeat the boot and regression suite under ASan and UBSan. | `VERIFIED` |
 | `EMU3-R4` | `CORRECTION_REQUIRED` | The SDL host pacing raised the 4 MiB SCSI startup from 0.561 s to 43.505 s offscreen. A/B runs isolated the host sleep and per-guest-frame rendering costs. | Verify comparable startup throughput, host presentation and guest clock rates, original-ROM IWM boot, SCSI, RTC/PRAM and input. | `VERIFIED` |
 | `EMU3-R5` | `CORRECTION_REQUIRED` | The SDL loader rejected `devel/umac/plus-system.image` because the disk backend required exactly 819,200 bytes. The reported 838,484-byte file has a DiskCopy 4.2 header, 1,600 data sectors and 1,600 sector tags. | Load the image directly, preserve all tags through GCR encoding, reject malformed containers, and test raw and tagged original-ROM boot and media protection. | `VERIFIED` |
-| `EMU3-R6` | `CORRECTION_REQUIRED` | Before the correction, inactive /ENBL left the Sony spindle running and the next selection reported motor-on. The generated fixture reproduced the active TACH and ready state with both enables inactive. | Propagate effective per-drive enable transitions at their exact C8M ticks. Verify immediate and delayed motor-off, cancellation, drive selection, reset and original-ROM boot. | `VERIFIED` |
+| `EMU3-R6` | `CORRECTION_REQUIRED` | Before the correction, inactive /ENBL left the Sony spindle running and the next selection reported motor-on. The generated fixture reproduced the active TACH and ready state with both enables inactive. | Propagate effective per-drive enable transitions at their exact C8M ticks. Verify immediate and delayed motor-off, cancellation, drive selection, reset and original-ROM boot. | `APPROVED` |
 
 ### EMU3-R6 — Motor-enable correction: developer handoff
 
-**Approved 2026-11-20.** Phase-1 rework on branch `plus-emu-0003-iwm`. Only motor/enable propagation, its timing and regression tests are required here. Do not implement Phase-2 writing or media hot-swap; [Document 04 `12.10](../../04-iwm-emulation.md#1210-disk-lifecycle-insertion-eject-and-drive-power-software-and-future-stm32) specifies future eject/insertion behaviour.
+**Approved 2026-11-20.** Phase-1 rework on branch `plus-emu-0003-iwm`. Only motor/enable propagation, its timing and regression tests are required here. Do not implement Phase-2 writing or media hot-swap; [Document 04 §12.10](../../04-iwm-emulation.md#1210-disk-lifecycle-insertion-eject-and-drive-power-software-and-future-stm32) specifies future eject/insertion behaviour.
 
 **Reproduction:** enable internal drive, command Sony MOTORON=0, wait for ready, then deassert effective /ENBL1 (or switch selection to absent external). The current `iwm.c` has no drive-disable notification. `disk_img.c` stops the spindle only for explicit Sony motor-off/eject, so the previous spindle state survives and the next enable incorrectly reports motor already on.
 
@@ -219,6 +219,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s devel/umac/tests -p 't
 - **2026-11-20 — Verification:** Added `iwm_motor_enable` and reset assertions in the original-ROM test. Recorded the deterministic trace, test commands and raw/tagged boot and regression results above. Marked `EMU3-R6` `VERIFIED`.
 - **2026-11-20 — Status Change:** Recorded the implementation and tests in local commit `a02b4ef72c02361f7fc68ef20e65a3c7691b2527`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 
+- **2026-11-20 — Independent Code Review / Approval:** Reviewer inspected [`a02b4ef`](https://github.com/keroblabs/tima_plus/commit/a02b4ef72c02361f7fc68ef20e65a3c7691b2527) and the recorded R6-T1–R6-T6 assertions. Approved timestamped effective /ENBL callbacks, exact cutoff before subsequent rotation, timer cancellation, drive switching, spindle stop without disk eject/cylinder loss and reset semantics. Developer recorded 13/13 Release tests for raw and tagged 800K images, 13/13 ASan/UBSan, original-ROM Finder boot and SCSI/RTC/PRAM checks; **reviewer did not independently execute tests**. No blocking finding. Marked `EMU3-R6` and commit `a02b4ef` `APPROVED`; `PLUS-EMU-0003` `REVIEW` → `RESOLVED`, awaiting project-owner final review/merge. The mid-step cancel and immediate virtual eject are documented Phase-1 simplifications.
+
 **Proposed Change**
 
 Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. Load the original ROM and synthesize circular GCR tracks from read-only 800K media. Retain the Phase 1 write stub.
@@ -235,8 +237,14 @@ For **EMU3-R6**, implement and test the precise effective-enable transition cont
 | --- | --- | --- | --- |
 | `plus-emu-0003-iwm` | `427e0d2` | `CHANGES_REQUESTED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
 | `plus-emu-0003-iwm` | `eb4322d` | `CHANGES_REQUESTED` | Tag/media and performance work reviewed; follow-up motor-enable correction `EMU3-R6` pending. |
-| `plus-emu-0003-iwm` | `a02b4ef` | `UNREVIEWED` | Correct effective Sony drive enable timing and verify motor-off, drive selection and reset. |
+| `plus-emu-0003-iwm` | `a02b4ef` | `APPROVED` | Reviewed effective Sony enable timing, cutoff, cancellation, selection, reset and regression evidence for EMU3-R6. |
 
 **Resolution Description**
 
-Pending.
+**RESOLVED, pending project-owner final review and merge.** The original, unmodified Macintosh Plus V3 ROM and its .Sony driver now boot System 6 through a read-only virtual 800K IWM/drive implementation, using independent `iwm.c/.h` and `disk_img.c/.h` components. Supports raw 819,200-byte images and DiskCopy 4.2 data/tags through a timed, circular GCR track stream; write operations remain stubbed and media write-protected.
+
+**Approved motor correction:** [`a02b4ef`](https://github.com/keroblabs/tima_plus/commit/a02b4ef72c02361f7fc68ef20e65a3c7691b2527) propagates effective /ENBL transitions from IWM to Sony model, stops spindle/TACH/readiness at actual cutoff (not when delayed shutdown is merely requested), handles countdown cancellation, drive selection and reset, and retains mounted media/cylinder. R6-T1–R6-T6 reviewed and approved from code/test evidence.
+
+**Verification evidence:** Developer recorded 13/13 Release CTests with raw and tagged images, 13/13 ASan/UBSan, original-ROM Finder boot and reboot after seek from cylinder 79, 11 sector/tag checks, expected `wPrErr`, preserved source hashes, SCSI and RTC/PRAM regression, SDL speed and Make/HFS tooling. Project owner previously manually verified floppy/SCSI/RTC operation. Reviewer inspected code and test assertions; did **not** independently run these tests.
+
+**Limitations:** Phase 2 [`PLUS-EMU-0010`](PLUS-EMU-0010.md) implements actual writes and persistence. Hot reinsertion and physical eject mechanics remain future STM32-facing scope. Canceling an unfinished step on loss of enable is deterministic Phase-1 policy, pending eventual physical validation. Earlier `CHANGES_REQUESTED` commit records remain as historical review decisions, while the corrective commit is approved. **This resolution does not claim the implementation was merged to `main`.**

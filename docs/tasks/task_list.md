@@ -1,6 +1,6 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** SCSI and RTC closed. The read-only IWM motor correction is in review, 20 November 2026.
+**Status:** SCSI and RTC closed. Read-only IWM reviewed and resolved pending owner merge; write phase remains open, 20 November 2026.
 
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
@@ -8,7 +8,7 @@
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current totals:** 5 registered / 1 OPEN / 0 IN_PROGRESS / 1 REVIEW / 0 RESOLVED / 3 CLOSED / 0 DEFERRED.
+**Current totals:** 5 registered / 1 OPEN / 0 IN_PROGRESS / 0 REVIEW / 1 RESOLVED / 3 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -18,7 +18,7 @@ No tickets formally opened under this category.
 
 | ID | Kind | Status | Title | Milestone | Ticket |
 | --- | --- | --- | --- | --- | --- |
-| [`PLUS-EMU-0003`](db/PLUS-EMU-0003.md) | `TASK` | `REVIEW` | Implement unmodified-ROM read-only IWM and virtual floppy | [PLUS-DEV-0003](../01-development-roadmap.md#plus-dev-0003--run-the-unmodified-macintosh-plus-rom) | [Details and history](db/PLUS-EMU-0003.md) |
+| [`PLUS-EMU-0003`](db/PLUS-EMU-0003.md) | `TASK` | `RESOLVED` | Implement unmodified-ROM read-only IWM and virtual floppy | [PLUS-DEV-0003](../01-development-roadmap.md#plus-dev-0003--run-the-unmodified-macintosh-plus-rom) | [Details and history](db/PLUS-EMU-0003.md) |
 | [`PLUS-EMU-0004`](db/PLUS-EMU-0004.md) | `BUG` | `CLOSED` | Implement Macintosh Plus NCR 5380 SCSI controller | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0004.md) |
 | [`PLUS-EMU-0005`](db/PLUS-EMU-0005.md) | `TASK` | `CLOSED` | Emulate a SCSI hard disk backed by a BlueSCSI-compatible image | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0005.md) |
 | [`PLUS-EMU-0009`](db/PLUS-EMU-0009.md) | `BUG` | `CLOSED` | Implement Macintosh Plus serial RTC and battery-backed PRAM | [PLUS-DEV-0002](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-EMU-0009.md) |
