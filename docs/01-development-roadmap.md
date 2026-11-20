@@ -170,7 +170,7 @@ These IDs preserve the suffixes of the earlier KL-EMU catalogue.
 | **PLUS-EMU-0006** | Debugger: execution trace, breakpoints, register/memory views, peripheral transactions, deterministic test hooks | Begins DEV-0002, grows throughout |
 | **PLUS-EMU-0007** | **NEXT / not opened:** Unicorn STM32F411 production binary, peripherals, agreed IWM↔firmware bridge, raw NOR device and end-to-end verification | DEV-0011 |
 | **PLUS-EMU-0008** | Functional M0001AP profile including ROM overlay, 1bpp video and necessary VIA/SCC/RTC/keyboard/mouse; full historical hardware matrix is a separate fidelity goal | DEV-0002 |
-| **PLUS-EMU-0010** | **REVIEW / code approved:** transactional IWM writes, ROM formatting and durable raw/typed DiskCopy image checkpoint; owner manual write acceptance remains | DEV-0004 |
+| **PLUS-EMU-0010** | **REVIEW / code approved:** transactional IWM writes, ROM formatting and durable raw/DiskCopy image checkpoint; owner manual write acceptance remains | DEV-0004 |
 
 ### PLUS-EMU-0007 detailed acceptance conditions — next firmware milestone (PLUS-DEV-0011)
 
@@ -196,7 +196,7 @@ These IDs preserve the suffixes of the earlier KL-EMU catalogue.
 
 ## Definition of done and evidence
 
-Every ticket should eventually record: scope, dependencies, source revision and build/toolchain identity; a reproducible test; observable acceptance evidence; known hardware-vs-emulator gaps; and explicit approval to close. **Phase 1** records the `pre-release-umac` baseline and original-ROM IWM tests, with owner manual write/merge acceptance outstanding. For **PLUS-EMU-0007 / PLUS-DEV-0011**, record the **STM32 firmware binary hash**, initial and final raw flash-image hashes, and evidence that the firmware (not a bypass) performed the I/O.
+Every ticket should eventually record: scope, dependencies, source revision and build/toolchain identity; a reproducible test; observable acceptance evidence; known hardware-vs-emulator gaps; and explicit approval to close. **Phase 1** records the `pre-release-umac` baseline and original-ROM IWM tests, with owner manual write/merge acceptance outstanding. Developer GUI screenshot/trace artifacts cited under `/tmp/` are not durable repository files; future reviewers should rely on committed test programs and the ticket's recorded hashes or rerun the GUI tests as needed. For **PLUS-EMU-0007 / PLUS-DEV-0011**, record the **STM32 firmware binary hash**, initial and final raw flash-image hashes, and evidence that the firmware (not a bypass) performed the I/O.
 
 The Tima framework repository is authoritative for generic kernel/framework/BSP improvements. This repo is authoritative for the Mac Plus target, programmer and Tima/Plus application integration. The uMac-derived emulator is **present under `devel/umac/` in this repository** and its accepted Phase-1 version is staged on `pre-release-umac`. Its firmware-facing backend will be added later without replacing the original-ROM/IWM regression model.
 
@@ -204,7 +204,7 @@ The Tima framework repository is authoritative for generic kernel/framework/BSP 
 
 - **Release gate (Phase 1):** owner's manual IWM write test on disposable media, decision on additional owner format test, and owner-controlled PR/merge. The ROM/IWM write protocol and virtual-floppy architecture are **implemented**, not undecided.
 - **STM32 Phase 2:** firmware peripheral usage, useful pre-existing Cortex-M4/Unicorn models, real-time encoded-data capture and buffer sizing.
-- **Physical interface:** whether and how ATF1508 assists STM32F411, GPIO/SPI framing, electrical level shifting and final Sonoma/Sony drive signal timing. Do not assume the physical architecture is settled by virtual uMac.
+- **Physical interface:** whether and how ATF1508 assists STM32F411, GPIO/SPI framing, electrical level shifting and final Sony-drive signal timing. Do not assume the physical architecture is settled by virtual uMac.
 - **Storage:** final raw NOR image layout, track metadata, GCR sector representation, tags and atomic flash write/recovery protocol; host removable-flash programmer interface.
 - **Physical M0001AP:** fitted ROM/RAM configuration and measured electrical behavior for hardware validation (the emulator itself has an identified Plus V3 ROM test fixture).
 - **Tima/Plus OS:** minimum RAM, 6.x SDK bring-up, ROM/native driver transition, boot-block and desktop decisions.
