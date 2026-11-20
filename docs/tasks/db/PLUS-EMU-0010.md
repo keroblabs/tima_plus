@@ -6,7 +6,7 @@
 
 **Description**
 
-Phase 1 (`PLUS-EMU-0003`) will deliberately expose a read-only virtual floppy backed by a circular encoded track bitstream. A real Macintosh Plus `.Sony` write, however, sends encoded data through the IWM's timed write-register handshake, overwriting media bits at the current rotation position. A standard `.dsk` holds only decoded 512-byte logical sectors; it must be updated by decoding valid modified track records after a write.
+Phase 1 (`PLUS-EMU-0003`) is **CLOSED** following owner-approved PR #3 to `main`. It established the original-ROM read-only IWM and circular encoded track bitstream. A real Macintosh Plus `.Sony` write, however, sends encoded data through the IWM's timed write-register handshake, overwriting media bits at the current rotation position. A standard `.dsk` holds only decoded 512-byte logical sectors; it must be updated by decoding valid modified track records after a write.
 
 This ticket **extends** the Phase-1 IWM and disk components to support writes, dirty-track detection, write-back, persistence and formatting. It must not reintroduce ROM patching or replace the two-component boundary with a high-level sector-operation shortcut.
 
@@ -15,11 +15,18 @@ This ticket **extends** the Phase-1 IWM and disk components to support writes, d
 - Kind: `TASK`
 - Category: `PLUS-EMU`
 - Primary milestone: [PLUS-DEV-0004](../../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) — direct virtual-floppy write prerequisite for subsequent Unicorn/STM32 integration.
-- Dependency: [PLUS-EMU-0003](PLUS-EMU-0003.md) **Phase 1 must be completed and accepted first**. This ticket is registered now to preserve component/API design, not to start simultaneous implementation.
+- **Dependency satisfied:** [PLUS-EMU-0003](PLUS-EMU-0003.md) is **CLOSED**, merged by [PR #3](https://github.com/keroblabs/tima_plus/pull/3). Phase 2 remains separately `OPEN`.
+- **Dedicated developer implementation guide:** [05-iwm-write-implementation.md](../../05-iwm-write-implementation.md), with proposed decisions for IWM write timing, decoder, dirty cache, DiskCopy/raw, safe persistence, formatting and tests; request owner review of its remaining choices.
 - Architecture: [04-iwm-emulation.md](../../04-iwm-emulation.md), especially §§3.2, 4.3, 6.2 and 8.
-- Intended code: extend the Phase-1 `iwm.c/.h` and `floppy_drive.c/.h`; storage-image and drive lifecycle integration in `devel/umac`; deterministic tests. Do not modify `disc_pv_hook()` as the authentic write implementation.
+- **Actual accepted source names:** extend `devel/umac/src/iwm.c`, `include/iwm.h`, `src/disk_img.c`, `include/disk_img.h`, plus narrowly scoped `main.c`, `unix_main.c`, tests and build configuration. The original-ROM `.Sony` driver remains unchanged; do not revive `disc_pv_hook()` or add a host-sector shortcut.
 - Known ROM evidence: the original `Sony_WrData` waits for write-handshake bit 7, loads encoded codewords, checks bit 6 for underrun and exits write mode. It writes on-disk sync, marks, tags and checksum as well as data; the emulator must respect their serial timing.
 - Confirmed limitation: ordinary 800K `.dsk` images do not losslessly represent arbitrary raw sync/gap, invalid encodings or all tag-field variations. The write-back policy must describe nonrepresentable data explicitly.
+
+### Proposed implementation decisions (Document 05)
+
+The developer should follow [Document 05](../../05-iwm-write-implementation.md) as the detailed engineering plan **after owner acceptance of its proposed policies**. Key directives: exact `Q6H`→`Q7H` first-byte write entry, `Q6L` handshake D7/D6, `Q6H` subsequent writes and `Q7L` exit; one-byte holding/shifter state with 16-C8M-tick bit cells; bit-positioned circular track mutation; per-side dirty preservation; inverse 703 GCR data codewords into 524 tag+data bytes and checksums; tagged DC42 as primary lossless writable image; explicit `-w` floppy write opt-in independent of SCSI `-p`; validation plus atomic media checkpoint; real-ROM `CtlFormat` from its transmitted stream. **Do not invent register or timing behaviour that conflicts with an original-ROM write trace.**
+
+**Internal delivery stages:** A — write handshake; B — circular bit writer; C — GCR inverse; D — image protection/persistence; E — original-ROM writes; F — original-ROM format; G — regression. See Document 05 §8–§10 for the exact gates and undecided details. One ticket covers the entire scope, with locally committed reviewable steps.
 
 ### IWM write behaviour
 
@@ -59,10 +66,11 @@ This ticket **extends** the Phase-1 IWM and disk components to support writes, d
 **Notes**
 
 - **2026-11-19 — Decision and registration:** Project owner approved a second ticket for writes following a read-only IWM/disk implementation. The two components are shared; writing modifies the circular bitstream and decodes/saves dirty tracks on head step, with additional lifecycle flush safety. This ticket uses `PLUS-EMU-0010` because `PLUS-EMU-0009` is already the closed RTC/PRAM ticket. No implementation or tests occurred at creation.
+- **2026-11-20 — Planning update:** Owner completed final PR review and merged [PR #3](https://github.com/keroblabs/tima_plus/pull/3); Phase-1 `PLUS-EMU-0003` is CLOSED. Reviewed actual `iwm.c`, `disk_img.c`, host CLI and original Mac Plus ROM `Sony_WrData`/`Sony_DoFormat` against the Apple IWM handshake/GCR description. Created [dedicated Document 05](../../05-iwm-write-implementation.md) with bounded implementation decisions, two-component interfaces, image-tag policy, atomic checkpoint, format behaviour and acceptance gates. **No Phase-2 code or write tests were performed; ticket stays OPEN pending developer implementation.**
 
 **Proposed Change**
 
-After `PLUS-EMU-0003` is approved, implement actual IWM write-buffer/handshake behaviour and bitstream overwrites; add dirty marking and safe decoded logical-sector flush at track/side changes and lifecycle boundaries. Validate all acceptance cases, particularly real ROM write/reopen and corrupted/incomplete writes. Commit locally with `git commit` and provide SHA(s) and test results; **do not `git push`**. Leave future STM32-only versus ATF1508 decisions outside this ticket.
+With `PLUS-EMU-0003` already approved, merged and CLOSED, apply the approved portions of [Document 05](../../05-iwm-write-implementation.md) and implement actual IWM write-buffer/handshake behaviour and bitstream overwrites; add dirty marking and safe decoded logical-sector flush at track/side changes and lifecycle boundaries. Validate all acceptance cases, particularly real ROM write/reopen and corrupted/incomplete writes. Commit locally with `git commit` and provide SHA(s) and test results; **do not `git push`**. Leave future STM32-only versus ATF1508 decisions outside this ticket.
 
 **Commits**
 

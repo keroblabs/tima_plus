@@ -1,10 +1,10 @@
 
 # Tima/Plus — IWM Emulation Architecture and Behaviour
 
-**Status:** Two-phase architecture approved. The read-only implementation and verification are recorded in [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md).
+**Status:** Two-phase architecture approved. Phase-1 read-only implementation [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) is **CLOSED on `main`** after PR #3; Phase-2 writes [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) remain **OPEN**, with [dedicated implementation plan](05-iwm-write-implementation.md).
 **Recorded:** 19 November 2026; read-only/write implementation split approved 19 November 2026
 **Target:** Macintosh Plus M0001AP, original MC68000, original IWM and unmodified Macintosh Plus ROM
-**Implementation tickets:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) (Phase 1: read-only) and [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) (Phase 2: writes)  
+**Implementation tickets:** [PLUS-EMU-0003](tasks/db/PLUS-EMU-0003.md) (Phase 1: closed) and [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md) (Phase 2: open); [05 — IWM Write Plan](05-iwm-write-implementation.md)  
 **Developer entry point:** [§12 — Mac Plus-specific IWM, Sony motor, head-step and drive-register implementation guide](#12-macintosh-plus-specific-implementation-guide-drive-control-and-head-movement)
 **Companions:** [Introduction](00-introduction.md) · [Development Roadmap](01-development-roadmap.md) · [Unicorn–uMac Integration](02-unicorn-umac-integration.md)
 

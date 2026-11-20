@@ -38,4 +38,6 @@ Existing roadmap identifiers (`PLUS-DEV-0001`–`0010`, `PLUS-EMU-0001`–`0008`
 
 [PR #3](https://github.com/keroblabs/tima_plus/pull/3), merged at [`b6ca242`](https://github.com/keroblabs/tima_plus/commit/b6ca242ae8efc5bc552b2491df7ad8ec0375f8a7), completed the read-only original-ROM IWM work: `PLUS-EMU-0003` is now **CLOSED** following the project-owner review, with Sony motor correction and expected Finder eject/restart behaviour confirmed. This does **not** close the separate write-phase ticket.
 
+**Dedicated Phase-2 developer plan:** [05-iwm-write-implementation.md](../05-iwm-write-implementation.md) provides proposed IWM write handshake, circular bit update, inverse GCR/sector tags, DC42 persistence, ROM format and testing decisions. [PLUS-EMU-0010](db/PLUS-EMU-0010.md) is still `OPEN`, not completed by documentation.
+
 **IWM/floppy phased work:** [PLUS-EMU-0003](db/PLUS-EMU-0003.md) establishes the unmodified-ROM, read-only IWM and encoded circular disk buffer **with write stubbed**; [PLUS-EMU-0010](db/PLUS-EMU-0010.md) later adds timed writes, dirty-track decode/flush and `.dsk` persistence. Both follow [04-iwm-emulation.md](../04-iwm-emulation.md). Implementation changes require **local `git commit`, not developer `git push`**, under the updated methodology.
