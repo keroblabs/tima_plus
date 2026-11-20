@@ -117,6 +117,7 @@ All reference inputs retained their hashes. Writes and formats used disposable c
 - **2026-11-20 — Owner decision and status change:** The project owner confirmed that raw `.dsk` stores sector data and tagged DiskCopy `.image` stores data and tags. Raw writes carrying tags must save their sector data. The owner also requested confirmation that PLUS-EMU-0003 reads both formats, with a finding if the reader rejects raw images. Moved `REVIEW` → `IN_PROGRESS` for `EMU10-R2` and marked `4fffe22` `CHANGES_REQUESTED` for the raw checkpoint policy.
 - **2026-11-20 — Reproduction and rework:** With the real writable startup state enabled in the raw ROM fixture, `iwm_plus_rom_boot` passed and `iwm_plus_rom_write` reproduced the checkpoint failure at cylinder 0 before the correction. Changed the checkpoint to stage raw sector data even when the fully validated GCR record carries a tag. Live tags remain in the cached track. The tagless DiskCopy check and full tagged DiskCopy checkpoint still follow their respective container layouts.
 - **2026-11-20 — Rework verification and status change:** Ran the full CTest matrix again. Tagged Release passed 17/17, raw 1 MiB Release 16/16, asset-free Debug 12/12 and tagged ASan/UBSan 17/17 with leak detection disabled. The sanitized raw write and format probes also passed. Original-ROM probes on raw System Tools and System 6.0.8 reached Finder with normal writable sense, saved sectors from writes carrying nonzero tags, and completed full format and verify. Rechecked tagless DiskCopy write, rejection and format plus both tagged checksum conventions. An SDL raw copy booted Finder 5.3, saved and ejected during Shut Down, restarted from SCSI, and then booted and read back in a fresh process. The read-only PLUS-EMU-0003 baseline and current builds passed on raw `.dsk` and tagged `.image`. Marked `EMU10-R2` `VERIFIED` and moved `IN_PROGRESS` → `REVIEW` for owner sign-off.
+- **2026-11-20 — Rework commit and handoff:** Standalone Make and all four HFS converter tests passed on the corrected code. Committed the raw checkpoint policy, ROM regression tests and updated guide at `c5488bd60e25524373f3106dc96670d70a6f157a`. Recorded the correction as `UNREVIEWED` for owner sign-off.
 
 **Proposed Change**
 
@@ -127,6 +128,7 @@ Implement the approved [Document 05](../../05-iwm-write-implementation.md) contr
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `docs-iwm-transactional-write` | `4fffe22` | `CHANGES_REQUESTED` | Implement and verify timed IWM writes, transactional track capture, image checkpoints and original-ROM formatting. Raw checkpoint policy revised in `EMU10-R2`. |
+| `docs-iwm-transactional-write` | `c5488bd` | `UNREVIEWED` | Save raw sectors from guest writes carrying tags and verify raw Finder startup, read-back and persistence under `EMU10-R2`. |
 
 **Resolution Description**
 
