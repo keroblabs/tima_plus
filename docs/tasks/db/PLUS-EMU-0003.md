@@ -1,7 +1,7 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `RESOLVED`
+**Status:** `CLOSED`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
@@ -269,6 +269,8 @@ In SDL's dummy video driver with the software renderer, the trace showed the ROM
 
 - **2026-11-20 — Consolidated investigation / owner handoff:** Project owner confirmed the independent engineering review and developer's `EMU3-R7` investigation agree. The dual-media sequence is expected original Macintosh behaviour: initial floppy/System 5 boot with both volumes mounted, Finder Shut Down sends the Sony EJECT command, `/CSTIN` then reports the floppy absent, and a guest restart boots System 6 from the still-attached SCSI disk. The developer reproduced this with IWM traces, confirmed a direct reset retains an unejected floppy, and recorded a separate data-only floppy fallback test; no implementation change is required. **Engineering work on Phase 1 is complete, all requested corrections accepted, status remains `RESOLVED`. Final project-owner review, creation of a PR to `main`, and merge remain explicitly pending and under the owner's control. Do not mark `CLOSED` until the owner reviews the integrated result and confirms it.**
 
+- **2026-11-20 — Project-Owner Final Review, PR and Closure:** Project owner confirmed final code review and merge of [PR #3](https://github.com/keroblabs/tima_plus/pull/3) to `main`, merge commit [`b6ca242`](https://github.com/keroblabs/tima_plus/commit/b6ca242ae8efc5bc552b2491df7ad8ec0375f8a7). The read-only original-ROM IWM implementation, Sony drive model, DiskCopy-tag handling and SCSI/RTC coexistence are accepted; `EMU3-R7` was confirmed expected Finder eject/restart rather than a defect. Status changed `RESOLVED` → `CLOSED`. Future write implementation stays separately open as `PLUS-EMU-0010`; this closure does not claim write support.
+
 **Proposed Change**
 
 Use `iwm.c/.h` and `disk_img.c/.h` with a timed-bit and drive-signal boundary. Load the original ROM and synthesize circular GCR tracks from read-only 800K media. Retain the Phase 1 write stub.
@@ -289,7 +291,7 @@ For **EMU3-R6**, implement and test the precise effective-enable transition cont
 
 **Resolution Description**
 
-**RESOLVED — engineering review complete; pending project-owner final review, PR to `main`, and merge.** The original, unmodified Macintosh Plus V3 ROM and its .Sony driver now boot System 6 through a read-only virtual 800K IWM/drive implementation, using independent `iwm.c/.h` and `disk_img.c/.h` components. Supports raw 819,200-byte images and DiskCopy 4.2 data/tags through a timed, circular GCR track stream; write operations remain stubbed and media write-protected.
+**CLOSED — project-owner final review completed; [PR #3](https://github.com/keroblabs/tima_plus/pull/3) merged into `main` as [`b6ca242`](https://github.com/keroblabs/tima_plus/commit/b6ca242ae8efc5bc552b2491df7ad8ec0375f8a7).** The original, unmodified Macintosh Plus V3 ROM and its .Sony driver now boot System 6 through a read-only virtual 800K IWM/drive implementation, using independent `iwm.c/.h` and `disk_img.c/.h` components. Supports raw 819,200-byte images and DiskCopy 4.2 data/tags through a timed, circular GCR track stream; write operations remain stubbed and media write-protected.
 
 **Approved motor correction:** [`a02b4ef`](https://github.com/keroblabs/tima_plus/commit/a02b4ef72c02361f7fc68ef20e65a3c7691b2527) propagates effective /ENBL transitions from IWM to Sony model, stops spindle/TACH/readiness at actual cutoff (not when delayed shutdown is merely requested), handles countdown cancellation, drive selection and reset, and retains mounted media/cylinder. R6-T1–R6-T6 reviewed and approved from code/test evidence.
 
@@ -297,4 +299,4 @@ For **EMU3-R6**, implement and test the precise effective-enable transition cont
 
 **Post-review confirmation:** `EMU3-R7` verifies expected System 5 Finder eject and restart-to-SCSI behaviour with original-ROM traces, as well as reset without eject and data-only floppy boot fallback. Independent reviewer and developer investigations agree; no corrective code changes required. Owner confirmed handoff to final review and PR.
 
-**Limitations:** Phase 2 [`PLUS-EMU-0010`](PLUS-EMU-0010.md) implements actual writes and persistence. Hot reinsertion and physical eject mechanics remain future STM32-facing scope. Canceling an unfinished step on loss of enable is deterministic Phase-1 policy, pending eventual physical validation. Earlier `CHANGES_REQUESTED` commit records remain as historical review decisions, while the corrective commit is approved. **This resolution does not claim the implementation was merged to `main`.**
+**Limitations:** Phase 2 [`PLUS-EMU-0010`](PLUS-EMU-0010.md) implements actual writes and persistence. Hot reinsertion and physical eject mechanics remain future STM32-facing scope. Canceling an unfinished step on loss of enable is deterministic Phase-1 policy, pending eventual physical validation. Earlier `CHANGES_REQUESTED` commit records remain as historical review decisions, while the corrective commit is approved. **Integrated to `main` and closed following project-owner confirmation.**
