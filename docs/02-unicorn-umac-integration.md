@@ -1,22 +1,23 @@
 # PLUS-EMU-0007 — Unicorn–uMac Floppy Integration
 
-**Status:** Approved architectural direction, detailed peripheral/protocol design pending  
-**Date:** 17 November 2026  
+**Status:** **Next/future Phase-2 firmware-integration design**; founding concept 17 November 2026, scope updated 20 November 2026 after functional uMac Phase-1 pre-release. STM32 firmware, physical interface and bridge protocol are **not yet implemented or frozen**.  
 **Related:** [Introduction](00-introduction.md) · [Roadmap](01-development-roadmap.md)
 
 ## Goal and motivation
 
-Debugging the STM32F411 in the eventual ATF1508-based physical floppy emulator is difficult. Our development machine should therefore run:
+The approved [Phase-1 uMac/IWM reference](01-development-roadmap.md#phase-1-release-checkpoint--working-umac--original-macintosh-plus) already runs the authentic original-ROM 800K drive with a software circular-track backend, and it also has virtual SCSI support. **The following design is the next, not-yet-built STM32 firmware endpoint**. Debugging that firmware directly on physical drive hardware would be difficult, so the future development environment should run:
 
 1. **The original MC68000 Macintosh ROM and `.Sony` disk code** under Musashi/uMac.
 2. **The exact STM32F411 production firmware binary** under Unicorn (Cortex-M4 target).
 3. **The exact SPI-NOR flash-device binary image** used by the physical disk cartridge/storage.
 
-The emulator joins the Macintosh IWM registers to the STM32's expected **ATF1508-facing SPI interface** by any convenient host-side mechanism. The bridge is intentionally not a hardware simulator. The observable contract at **both ends** must be correct.
+The emulator will connect the **existing** Macintosh IWM model to the STM32 firmware's agreed **production-facing transfer/control contract**, by any suitable host-side mechanism. An ATF1508-driven SPI interface is a **candidate**, not a finalized implementation. The bridge is intentionally not a hardware simulator. The observable contract at **both ends** must be correct.
 
 We want to discover track handling, buffering, GCR/sector interpretation, writes, erases, filesystem boot and persistence bugs before deploying firmware to the physical device. This is especially important for reproducing rare errors with CPU instruction tracing, memory watches and programmable fault injection.
 
 ## Component boundaries
+
+The following diagram shows the **original SPI/ATF1508 candidate**. It is illustrative, **not a committed pin-level topology or final SPI message format**; revise it when production firmware and the physical interface have been selected.
 
 ```text
          ORIGINAL MACINTOSH PLUS SOFTWARE
@@ -55,7 +56,7 @@ We want to discover track handling, buffering, GCR/sector interpretation, writes
                 └────────────────┘
 ```
 
-The final hardware has an ATF1508 CPLD between the Mac's drive interface and STM32. **Do not emulate the CPLD's internal RTL, glue logic, signal propagation or electrical levels here.** The bridge supplies its expected *observable* SPI-level messages/events, potentially pre-decoded from Macintosh activity. The real CPLD is validated separately against timing and signal tests.
+The candidate physical hardware places an ATF1508 CPLD between the Mac's drive interface and STM32; its specific role, levels and framing need further design review. **Do not emulate CPLD RTL, glue logic, signal propagation or electrical levels here.** The bridge supplies the agreed *observable* firmware-facing messages/events, potentially pre-decoded from Macintosh activity. The real electrical interface must be validated separately against hardware timing and signal tests.
 
 ## Endpoint fidelity requirements
 
@@ -75,7 +76,7 @@ The final hardware has an ATF1508 CPLD between the Mac's drive interface and STM
 - Map internal STM32 flash and SRAM at the target addresses, initialize the Cortex-M vector table/stack/reset state, and execute the actual Thumb/ARM firmware.
 - Model the **peripheral register semantics** used by firmware. Candidate set: RCC, GPIO, SPI, DMA, SysTick/timers, NVIC/SCB and internal flash control if used.
 - Route interrupts and DMA completions in a manner consistent with the virtual peripheral state. Firmware must not receive "completion" without the corresponding bytes or state changes.
-- Present the same external ATF1508-to-STM32 SPI transaction format (and any other firmware-visible control signals agreed in the hardware design).
+- Present the **agreed production STM32-facing protocol** (potentially ATF1508-to-STM32 SPI, if selected) and any other firmware-visible control signals defined in the hardware design.
 - Allow debugger attachment, symbolic ELF inspection and tracing without requiring firmware-specific instrumentation or recompilation.
 
 An ELF can supply symbols while a raw `.bin` supplies the bytes; verify that they correspond to **one production build**. Any emulator-only boot bypass or firmware patch invalidates a production-fidelity test.
@@ -104,7 +105,7 @@ The Macintosh's original floppy driver may operate on timeouts/handshakes, so us
 
 The STM32 has logically separate interactions:
 
-1. **Mac/ATF1508-facing SPI:** often an STM32 slave receiving CPLD-produced control/data transactions; exact clocking, framing, and DMA use are determined by the physical design and production firmware.
+1. **Mac-facing firmware interface:** potentially an STM32 SPI slave receiving CPLD-produced control/data transactions; whether SPI is used and its exact clocking, framing, and DMA role depend on the future physical design and production firmware.
 2. **External SPI NOR:** the STM32's flash-device transactions, through a separate model implementing its memory chip commands and status.
 
 Even if the implementation eventually shares code or hardware resources, the test architecture must not confuse the interface that *feeds the STM32* with the one that *stores the disk image*.
@@ -155,7 +156,7 @@ Tests explicitly classify the level proven: **endpoint software**, **emulated pe
 
 - Investigate existing STM32 peripheral emulation code already held by the project owner; reuse it if suitable for F411, license and coverage.
 - Verify Unicorn's Cortex-M4F instruction/FPU/exceptions behavior required by the chosen firmware build. Write focused CPU/peripheral self-tests before attempting a disk boot.
-- The hardware-facing SPI message format must be documented jointly with ATF1508 RTL and firmware. The bridge deliberately depends on that contract, not on RTL internals.
+- The **actual hardware-facing transfer/message format** must be documented jointly with firmware and any selected ATF1508 RTL. The bridge deliberately depends on that contract, not on optional CPLD internals.
 - Ensure IWM controller visibility to the original ROM is strong enough to satisfy boot and write paths even while mechanical simulation is absent.
 - Keep CLI/headless regression tests possible; the SDL/GUI frontend must not be required for all automated tests.
 - The real F411 flash, SPI and DMA configuration may evolve; track exact binary/SDK version used for each passing integration test.
@@ -163,4 +164,4 @@ Tests explicitly classify the level proven: **endpoint software**, **emulated pe
 
 ## Not required for PLUS-EMU-0007
 
-A full Mac floppy drive mechanical emulator; accurate ATF1508 logic simulation; an emulated SCSI disk; LCD/PSU support; modified Macintosh ROM; or a desktop-level reimplementation of the STM32 firmware.
+A full Mac floppy drive mechanical emulator; accurate ATF1508 logic simulation; **new SCSI development (already available in Phase-1 uMac)**; LCD/PSU support; modified Macintosh ROM; or a desktop-level reimplementation of the STM32 firmware.
