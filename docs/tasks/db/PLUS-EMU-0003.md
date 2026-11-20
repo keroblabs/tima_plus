@@ -1,7 +1,7 @@
 # PLUS-EMU-0003 — Implement unmodified-ROM read-only IWM and virtual floppy
 
 **ID:** `PLUS-EMU-0003`
-**Status:** `IN_PROGRESS`
+**Status:** `REVIEW`
 **Title:** Implement unmodified-ROM read-only IWM and virtual floppy
 
 **Description**
@@ -143,6 +143,7 @@ ctest --test-dir /tmp/tima-plus-iwm --output-on-failure
 - **2026-11-20 — Rework:** Removed CPU sleeps and scheduled rendering on its own host deadline. The initial uncapped build retained guest-clock VBL and drove `TickCount` at 6,856 Hz in a desktop test. Restored the pre-IWM wall-time VBL policy to preserve the original ROM's key-repeat and double-click intervals. VIA timer and floppy bit timing remain on C8M. Scheduled the RTC interrupt on wall time because the ROM adds one second for each CA1 interrupt. Added the read-only DiskCopy parser and threaded sector tags through the running GCR payload checksum.
 - **2026-11-20 — ROM test correction:** The official tagged System Tools image reached Finder, then the probe hit System Error `$1C` after borrowing 1 KiB below the live stack pointer. The integration test now keeps the live stack and allocates its probe buffers through the guest Memory Manager. The tagged image then passed all sector, tag, protection and reset checks.
 - **2026-11-20 — Verification:** Passed 12/12 CTests in 4 MiB Release with the reported tagged image, 11/11 in 1 MiB Release with raw System Tools, and 9/9 in Debug without external assets. Passed 12/12 in 4 MiB Debug under ASan and UBSan with leak detection disabled in the sandbox. All four HFS converter tests and the standalone Make build passed. Confirmed offscreen and Wayland startup and guest timing. The ROM and media hashes matched before and after the runs. Marked `EMU3-R4` and `EMU3-R5` `VERIFIED`.
+- **2026-11-20 — Status Change:** Recorded both corrections in local commit `eb4322d3936afb16334d29ac04f023bd82b98ced`. Moved `IN_PROGRESS` → `REVIEW` for project-owner review.
 
 **Proposed Change**
 
@@ -157,6 +158,7 @@ For `EMU3-R5`, validate Macintosh 800K DiskCopy 4.2 headers, lengths and checksu
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `plus-emu-0003-iwm` | `427e0d2` | `CHANGES_REQUESTED` | Implement and verify read-only IWM, Sony drive and original-ROM 800K boot. |
+| `plus-emu-0003-iwm` | `eb4322d` | `UNREVIEWED` | Add read-only DiskCopy 4.2 and sector tags, restore desktop speed and verify both corrections. |
 
 **Resolution Description**
 
