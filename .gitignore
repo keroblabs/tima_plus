@@ -12,3 +12,6 @@ build/
 devel/umac/HD10_512.hda
 devel/umac/kiosky.hda
 ram.bin
+devel/umac/plus-system.image
+pram.nv
+pram.nv.lock
