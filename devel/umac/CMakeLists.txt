@@ -132,7 +132,7 @@ if(BUILD_TESTING)
             elseif(EXISTS "${UMAC_TEST_PLUS_FLOPPY}")
                 file(SIZE "${UMAC_TEST_PLUS_FLOPPY}" UMAC_TEST_FLOPPY_SIZE)
             endif()
-            if(UMAC_TEST_LINK_WRAP OR UMAC_TEST_FLOPPY_SIZE EQUAL 838484)
+            if(UMAC_TEST_LINK_WRAP OR UMAC_TEST_FLOPPY_SIZE EQUAL 819200 OR UMAC_TEST_FLOPPY_SIZE EQUAL 838484)
                 add_test(NAME iwm_plus_rom_write
                          COMMAND umac_iwm_rom_test "${UMAC_TEST_PLUS_ROM}" "${UMAC_TEST_PLUS_FLOPPY}" --write)
                 add_test(NAME iwm_plus_rom_format

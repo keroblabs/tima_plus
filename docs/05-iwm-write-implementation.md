@@ -38,7 +38,7 @@ Do **not** add Apple II 5.25-inch modes, MFM/SWIM 1.44MB, physical WRDATA transi
 | **D04 — Transactional stream** | Write **timed logical encoded bits into a temporary copy of the selected circular track** at the current angular position, including non-8-bit-aligned self-sync and wrap. On successful `Q7L`, validate and swap into the active track. No append, artificial alignment, decoded-sector shortcut or fake NRZI pin pulse. |
 | **D05 — Cache** | Preserve active tracks and dirty state for **both sides** of the current cylinder. Maintain at most one in-flight temporary candidate for the selected side; never rebuild or evict a dirty active track from the old image. |
 | **D06 — Writable flag** | `-d` remains **read-only by default**. Reuse reserved `-w` for explicit **floppy** writes (requires `-d`). `-p` still controls **SCSI**, independently. |
-| **D07 — Image fidelity** | **Tagged 838,484-byte DiskCopy 4.2** is the primary lossless 512+12-byte write/reopen test. Raw 819,200-byte and tagless DC42 are data-only; never silently discard changed nonzero tags. |
+| **D07 — Image fidelity** | **Tagged 838,484-byte DiskCopy 4.2** preserves the 512-byte sector and 12-byte tag. Raw 819,200-byte images save sector data even when writes carry tags. Tagless DC42 rejects checkpoints with nonzero tags. |
 | **D08 — Two commits** | **Transaction commit:** at valid `Q7L`, swap the validated temporary track into active RAM, immediately available for reads. **Persistence checkpoint:** save only dirty, validated active tracks before seek-cache replacement, guest eject, media replacement, clean exit and appropriate idle/power-down checkpoints. Clean tracks cause **no host write**. |
 | **D09 — Durability** | Stage and validate a complete candidate image; use a same-directory temporary file + `fsync` + **atomic rename** and stable single-writer locking. Never clear dirty on a failed checkpoint. |
 | **D10 — Format** | The ROM writes a full circular track and later measures gaps. Use **the same temporary track transaction**, retaining all transmitted syncs/gaps, and swap only after a verified complete format stream. Do not synthesize a host format on request. |
@@ -163,12 +163,12 @@ Sony read index 3 (`/WRPROT`) reports **0** when inserted image is read-only, **
 | Image | Persistable content |
 | --- | --- |
 | **Tagged DiskCopy 4.2**, 84+819200+19200 = **838,484 bytes** | Primary full-fidelity path: save both **512 data + 12 tag bytes** per sector, update checksums while keeping original header/size/encoding/format |
-| **Raw .dsk**, **819,200 bytes** | Logical sector **data only**. Save supported data-only modifications, but **reject a checkpoint that would silently lose changed nonzero tag bytes**. Additional sidecar or format conversion is a separate owner decision |
-| **Tagless DiskCopy 4.2**, **819,284 bytes** | Same data-only/tag limitation; don't alter its format to add tag fields without an approved conversion |
+| **Raw .dsk**, **819,200 bytes** | Saves each **512-byte sector** even when the guest supplies a nonzero tag. The live encoded track serves the transmitted tag until it is rebuilt from the image with zero-filled tags. |
+| **Tagless DiskCopy 4.2**, **819,284 bytes** | Saves data-only writes and preserves the tagless container. A checkpoint with a nonzero tag fails and retains the dirty track. |
 
 Tagged DC42 stores **big-endian checksums at header offsets 0x48 and 0x4C**. The current parser accepts two historical tag-checksum conventions: including all tags, or **skipping the first 12-byte tag**. Preserve whichever convention matched the image at open, recompute data and tag checksums over the **new** image contents, and preserve original header name, format `$22`, encoding `1` and signature `$0100`. Reopen with the strict existing reader to verify the committed image. <https://ciderpress2.com/formatdoc/DiskCopy-notes.html>
 
-**Explicit representability question:** Original ROM write operations may supply nonzero tags even when the host input was a raw image. For safe Phase-2 scope, tagged DC42 is the writable test authority; raw/tagless data-only writes may succeed only if they do **not** discard guest tag changes. If that limitation blocks required usage, record the guest trace and seek an owner decision on sidecar tags or explicit conversion, **not silent loss**.
+The owner confirmed on 20 November 2026 that raw `.dsk` saves sectors and tagged DiskCopy `.image` uses its tag storage. System Tools and System 6.0.8 can transmit nonzero tags during ordinary startup, so raw sector checkpoints must support those writes. The loader determines the layout from the validated image contents. [PLUS-EMU-0010 review and decision log](tasks/db/PLUS-EMU-0010.md)
 
 ### 6.3 Atomic host image checkpoint
 
@@ -219,7 +219,7 @@ Record each stage and changes in [PLUS-EMU-0010](tasks/db/PLUS-EMU-0010.md), pre
 | **W-A04** | A live track is unchanged while writing; candidate captures sub-byte positions, 48-bit sync and wrap; valid Q7L swaps atomically, identical bits do not dirty, read-after-write uses swapped data |
 | **W-A05** | Candidate decoder validates cylinder/side/sector pairing, inverse 703 codewords, 524 bytes and checksums; partial/invalid sector or format is discarded without modifying active track |
 | **W-A06** | Tagged DC42 guest write/reopen preserves exactly changed **512+12** and checksum convention, with unaffected sectors unchanged |
-| **W-A07** | Raw/tagless data-only write works where representable; nonzero changed tags produce **explicit error**, not silent loss |
+| **W-A07** | Raw `.dsk` boots writable and saves sector data from writes with nonzero tags. The live track serves the tags and a rebuilt track supplies zeros. Tagless DiskCopy saves data-only writes and reports an error if a checkpoint would lose tags. |
 | **W-A08** | Interrupt during write discards only in-flight candidate; earlier swapped dirty track survives reset/stop/step; flush dirty old cylinder on step (both sides), eject/normal close; clean image never rewritten |
 | **W-A09** | Failures in image open, decode, write, fsync, rename, concurrent mount and file alias cannot silently destroy original data or dirty buffer |
 | **W-A10** | Original unmodified ROM `_Write`, `_Read` and fresh-process image reopen report correct data/tags |
@@ -236,7 +236,7 @@ Use disposable copies of known-good tagged System media and blank/formatted fixt
 
 1. **First-byte timing:** exact phase from the first `Q7H` write to first serial bit and holding→shift transfer edge, measured with actual ROM-timed writes.
 2. **Final-byte/underrun:** exact interaction between dummy `$FF`, D6 handshake, current serial bit and `Q7L` exit; do not fabricate a sub-byte hardware phase or require final filler to finish if valid meaningful content already did.
-3. **Tags on raw media:** measure actual tag bytes emitted during original ROM writes, including System 5/6 media. Data-only raw/tagless checkpoints may proceed if the represented tags are zero/unchanged; do not silently discard nonzero modifications.
+3. **Tags on raw media:** observe writes from original System 5/6 software and verify that raw checkpoints persist their sector data and keep the raw layout. Verify immediate tag read-back from the live track and zero tags after reloading from the raw image.
 4. **Format/gap:** explicitly test a **complete transmitted format that overwrites its own first address mark**: it must become provisional active so the ROM detects the shortage and retries; the provisional track must fail host checkpoint until finally valid. By contrast, an interrupted incomplete format must roll back. Prove copied old sectors cannot fabricate a complete transmission.
 5. **Error signalling:** IWM D6 reflects transport underrun, not post-Q7L parse failures. Define precise trace/host-blocking behaviour and observe what the ROM can independently verify. A failed host-image checkpoint must retain already-swapped dirty tracks and prevent false safe ejection/exit.
 6. **STM32:** buffer sizing, real-time capture while decoding, bit/edge format, possible ATF1508 assistance, flash power-loss behaviour and cartridge removal are later physical implementation decisions, not prerequisites to implement the virtual IWM.

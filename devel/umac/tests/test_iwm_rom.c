@@ -47,7 +47,7 @@ void __real_disk_img_write_bit(struct disk_img *disk, unsigned int bit);
 
 bool __wrap_disk_img_sense(const struct disk_img *disk, unsigned int reg)
 {
-        /* Simulate the write-protect tab on the data-only boot fixture until
+        /* Simulate the write-protect tab on the tagless DiskCopy fixture until
          * Finder is ready. The low-level write test runs with normal sense. */
         return (protected_during_boot && disk && reg == 3) ? false : __real_disk_img_sense(disk, reg);
 }
@@ -296,17 +296,23 @@ static void test_writable(struct disk_img *disk, unsigned int scratch, uint8_t *
                 sony_request(scratch, 0, data, tags, SONY_VERIFY, noErr);
                 puts("Original ROM read-verify detected a rejected candidate as unchanged media");
 #endif
+                uint8_t *raw_tags = NULL;
+                if (size == DISK_IMG_SIZE) {
+                        raw_tags = calloc(1600, TAG_BYTES);
+                        CHECK(raw_tags);
+                }
+                uint8_t *written_tags = tags ? tags : raw_tags;
                 const unsigned int blocks[] = {0, 12};
                 for (unsigned int i = 0; i < 2; ++i) {
                         unsigned int block = blocks[i];
                         for (unsigned int j = 0; j < SECTOR_BYTES; ++j)
                                 data[block * SECTOR_BYTES + j] ^= 0xa5;
-                        if (tags)
+                        if (written_tags)
                                 for (unsigned int j = 0; j < TAG_BYTES; ++j)
-                                        tags[block * TAG_BYTES + j] ^= 0x5a;
-                        sony_request(scratch, block, data, tags, SONY_WRITE, noErr);
+                                        written_tags[block * TAG_BYTES + j] ^= 0x5a;
+                        sony_request(scratch, block, data, written_tags, SONY_WRITE, noErr);
                         CHECK(disk_img_status(disk).write_result == DISK_IMG_WRITE_COMMITTED);
-                        sony_request(scratch, block, data, tags, SONY_READ, noErr);
+                        sony_request(scratch, block, data, written_tags, SONY_READ, noErr);
                         CHECK(disk_img_status(disk).dirty_sides == (i ? 3u : 1u));
                 }
                 CHECK(read_file(writable_path, after, TAGGED_DISKCOPY_SIZE) == size);
@@ -314,7 +320,15 @@ static void test_writable(struct disk_img *disk, unsigned int scratch, uint8_t *
                 sony_request(scratch, 24, data, tags, SONY_READ, noErr); /* Step to cylinder one. */
                 CHECK(!disk_img_status(disk).dirty_sides);
                 puts("Original ROM wrote and read both sides before a seek saved them");
-                if (!tags) {
+                if (raw_tags) {
+                        /* Read both sides of cylinder one to replace the two
+                         * cached tracks before reading cylinder zero again. */
+                        sony_request(scratch, 36, data, NULL, SONY_READ, noErr);
+                        sony_request(scratch, 0, data, NULL, SONY_READ, noErr);
+                        sony_request(scratch, 12, data, NULL, SONY_READ, noErr);
+                        puts("Raw image saved both sectors and regenerated zero tags from the file");
+                        free(raw_tags);
+                } else if (!tags) {
                         uint8_t *tag_probe = calloc(1600, TAG_BYTES);
                         CHECK(tag_probe);
                         tag_probe[24 * TAG_BYTES] = 0x5a;
@@ -326,7 +340,7 @@ static void test_writable(struct disk_img *disk, unsigned int scratch, uint8_t *
                         CHECK(read_file(writable_path, after, TAGGED_DISKCOPY_SIZE) == size);
                         CHECK(!memcmp(after, expected, size));
                         sony_request(scratch, 24, data, NULL, SONY_WRITE, noErr);
-                        puts("Data-only image retained the nonzero tag in RAM and refused to save it");
+                        puts("Tagless DiskCopy retained the nonzero tag in RAM and refused to save it");
                         free(tag_probe);
                 }
         }
@@ -373,7 +387,7 @@ int main(int argc, char **argv)
         const uint8_t *data = expected + (image_size == DISK_IMG_SIZE ? 0 : DISKCOPY_HEADER);
         const uint8_t *tags = image_size == TAGGED_DISKCOPY_SIZE ? data + DISK_IMG_SIZE : NULL;
 #ifdef UMAC_TEST_LINK_WRAP
-        protected_during_boot = writable && !tags;
+        protected_during_boot = writable && image_size == DISKCOPY_SIZE;
 #endif
         if (writable)
                 make_writable_image(expected, image_size);

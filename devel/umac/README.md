@@ -129,10 +129,11 @@ Use `-d disk.image -w` to enable persistent floppy writes. `-d` alone mounts
 the floppy write protected. `-p` enables SCSI writes independently.
 
 Tagged DiskCopy 4.2 images preserve both the 512-byte data and the 12-byte tag
-of every sector. Raw `.dsk` and tagless `.image` files support data-only writes.
-System software can supply nonzero tags even for ordinary volume updates. A
-save requiring such tags fails on data-only media and retains the modified
-track in memory.
+of every sector. Raw `.dsk` images save the 512-byte sector data even when the
+guest write carries nonzero tags. Those tags are available while the encoded
+track is cached. Rebuilding it from the raw file supplies zero tags. Tagless
+DiskCopy images accept data-only saves and reject a checkpoint that would
+lose nonzero tags.
 
 The emulator saves dirty tracks when moving to another cylinder, ejecting, or
 closing the window. A failed save blocks the move, eject or close and reports
@@ -165,9 +166,9 @@ To collect the MMIO trace, run `build-cmake/umac_iwm_rom_test ROM FLOPPY --trace
 
 `iwm_plus_rom_write` and `iwm_plus_rom_format` use disposable copies. They
 exercise `.Sony` writes, immediate read-back, seek-triggered persistence,
-format gap retry, full-disk verify and reopening. On Linux, the test build also
-exercises raw and tagless media with the fixture write-protected during system
-startup, then uses the normal writable drive state for the `.Sony` probes.
+format gap retry, full-disk verify and reopening. Raw and tagged media boot
+with writes enabled. On Linux, the tagless DiskCopy tests simulate write
+protection during startup, then exercise the writable drive with `.Sony`.
 
 ## SCSI hard disks
 

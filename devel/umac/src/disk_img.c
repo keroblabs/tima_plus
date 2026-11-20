@@ -780,10 +780,12 @@ static int stage_track(const struct disk_img *disk, unsigned int side, uint8_t *
         unsigned int block = first_block(track->cylinder, side);
         uint8_t *data = image + (disk->data - disk->image);
         static const uint8_t empty_tag[TAG_SIZE] = {0};
+        /* Raw images store only sector data. Their guest tags remain in
+         * the encoded track until it is rebuilt from the backing image. */
         for (unsigned int sector = 0; sector < sectors_per_side(track->cylinder); ++sector, ++block) {
                 if (disk->tags) {
                         memcpy(image + DC42_DATA_END + block * TAG_SIZE, decoded[sector], TAG_SIZE);
-                } else if (memcmp(decoded[sector], empty_tag, TAG_SIZE)) {
+                } else if (disk->image_size == DC42_DATA_END && memcmp(decoded[sector], empty_tag, TAG_SIZE)) {
                         errno = ENOTSUP;
                         return -1;
                 }
@@ -804,7 +806,7 @@ static int checkpoint_tracks(struct disk_img *disk, const char **detail)
         int error;
         for (unsigned int side = 0; side < 2; ++side) {
                 if (disk->tracks[side].dirty && stage_track(disk, side, image) < 0) {
-                        *detail = errno == ENOTSUP ? "image format cannot store nonzero sector tags" :
+                        *detail = errno == ENOTSUP ? "tagless DiskCopy image cannot store nonzero sector tags" :
                                   "track format is incomplete or has an invalid circular gap";
                         goto fail;
                 }
