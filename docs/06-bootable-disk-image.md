@@ -340,7 +340,9 @@ print('entry bytes:', data[2:6].hex(' '))
 print('version:', hex(struct.unpack_from('>H', data, 6)[0]))
 print('MFS/HFS volume signature at LBA2:', data[1024:1026].hex(' '))
 if data[1024:1026] == b'BD':
-    blocks, alloc_bytes, first_lba = struct.unpack_from('>HI', data, 1024 + 0x12)[0], struct.unpack_from('>I', data, 1024 + 0x14)[0], struct.unpack_from('>H', data, 1024 + 0x1c)[0]
+    blocks = struct.unpack_from('>H', data, 1024 + 0x12)[0]
+    alloc_bytes = struct.unpack_from('>I', data, 1024 + 0x14)[0]
+    first_lba = struct.unpack_from('>H', data, 1024 + 0x1c)[0]
     name_len = data[1024 + 0x24]
     name = data[1024 + 0x25:1024 + 0x25 + min(name_len, 27)]
     print('HFS allocation blocks:', blocks, 'size:', alloc_bytes,
