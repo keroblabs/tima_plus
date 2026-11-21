@@ -40,11 +40,11 @@ Secondary specifications: [Inside Macintosh: Boot Blocks](https://dev.os9.ca/tec
 
 **Not yet confirmed experimentally for a new Tima/Plus disk:** successfully entering our own disk code; 68000 registers and safe RAM bounds at the actual handoff; repeated ROM `_Read` calls from inside the custom stage one; executable location/relocation; multi-sector CRC and control transfer; full image boot under original ROM. These are explicit acceptance gates, **not claimed results**.
 
-**Historical disk-image evidence:** a user-provided 16-byte prefix from a non-tagged `.dsk` is now decoded below (signature, branch, version and beginning of System name). It is **not** a full header, disassembly, hash, filesystem or successful boot trace. The project's previously used `plus-system.image` (local, not checked into Git) is independently known to boot in uMac, but it has not been established that this `.dsk` excerpt is from that exact file. Do not assume that identity or invent its other values.
+**Historical disk-image evidence:** The owner has supplied the **entire first 128 bytes**, a subsequent **272-byte boot-block code/table region (`0x80–0x18F`)**, and the **first 48 bytes of LBA 2** from a non-tagged `.dsk`. Sections 2.3–2.5 decode these. The HFS MDB suggests a **1,474,560-byte 1.44 MB disk**, not an 819,200-byte 800K floppy; confirm by checking the actual file size. Neither a full boot trace nor a file hash has been supplied. The separately used local `plus-system.image` is known to boot in uMac, but must **not** be assumed to be this particular `.dsk`.
 
-### 2.3 User-supplied historical boot-block bytes (inspection expanded, 21 November 2026)
+### 2.3 User-supplied historical boot-block bytes (complete header, 21 November 2026)
 
-The owner supplied the **first 16 data bytes** and then **272 additional bytes covering absolute offsets `0x80–0x18F`** from a **non-tagged** Macintosh `.dsk` image. This is partial source-media evidence; the full original image remains outside Git.
+The owner supplied **all 128 initial data bytes** (`0x00–0x7F`), then **272 bytes at `0x80–0x18F`**, from a **non-tagged** Macintosh `.dsk`. Taken together they provide the 138-byte legacy header followed by the entire 262-byte code/table region ending at the observed `RTS`. The full original disk image remains outside Git.
 
 ```text
 Offset    Bytes             Meaning
@@ -60,7 +60,9 @@ Offset    Bytes             Meaning
 
 **Measured region:** the supplied 272-byte stream begins at `0x80`. Its first ten bytes finish the old-style header (through offset `0x89`). Executable code and embedded lookup tables span `0x8A–0x18F` (**262 bytes total**), ending with `4E 75` (`RTS`) at `0x18E`. The owner reports that subsequent bytes repeat `0xDA` (padding), consistent with a published, byte-for-byte **matching first-sector specimen** in [a November 2022 MacRumors boot-block dump](https://forums.macrumors.com/threads/question-how-powerful-of-a-graphics-card-will-work-in-a-beige-power-macintosh-g3.2303689/page-31), which displays the same bytes from offset `0x80` through `0x18F` and `DA` padding at `0x190–0x1FF`. **This does not establish that the owner's `.dsk` is the same disk or that its whole image is valid.** The code itself is partly instructions and partly embedded ROM-version tables, not 262 consecutive instruction bytes.
 
-**Still pending for this specimen:** complete boot blocks, the remaining `System` filename byte, volume header at LBA 2, total image size and SHA-256, validation that this specific file boots in uMac, and disassembly/ROM-trap traces of its stage-one code.
+**Names and final header bytes verified from the complete supplied prefix:** `System` (`+0x0A`, 6), `Finder` (`+0x1A`, 6), `MacsBug` (`+0x2A`, 7), `Disassembler` (`+0x3A`, 12), `StartUpScreen` (`+0x4A`, 13), `Finder` (`+0x5A`, 6), `Clipboard` (`+0x6A`, 9). Each occupies a 16-byte Pascal-string field (length, characters, zero padding). Boot header fields: `bbCntFCBs` `+0x7A` = 10; `bbCntEvts` `+0x7C` = 20; `bb128KSHeap` `+0x7E` = `0x00004300`; `bb256KSHeap` `+0x82` = `0x00008000`; `bbSysHeapSize` `+0x86` = `0x00020000`. These are historical System-startup configuration values, not requirements for the native Tima/Plus no-return loader.
+
+**Still pending for this specimen:** full 1024-byte boot blocks including padding and any second-block contents, actual total file size and SHA-256, and the exact execution/ROM trap trace. LBA 2 has now been partially inspected in §2.5. **Do not assume this source image boots in the current 800K-only uMac floppy path.**
 
 ### 2.4 Decoding the actual legacy boot-block program (0x8A–0x18F)
 
@@ -113,6 +115,39 @@ The code also conditionally adjusts `SysZone`/`_SetApplBase` using the boot head
 Trap names and low-memory symbols are cross-referenced against [`mac_rom/include/traps.inc`](https://github.com/jonathanschilling/mac_rom/blob/main/include/traps.inc), [`include/lowmem.inc`](https://github.com/jonathanschilling/mac_rom/blob/main/include/lowmem.inc) and [the published `_UnmountVol` trap listing](https://vintageapple.org/macprogramming/pdf/Inside_Macintosh_X-Ref_1988.pdf). The listing is a manual, control-flow-aware decode of the supplied bytes; exact execution branches and resource availability remain **untraced in uMac**.
 
 **Design consequence for Tima/Plus:** Preserve the **ROM's 1024-byte read + `LK` + `0x44` + branch mechanism**. Replace this legacy Macintosh manager/resource logic with a much smaller, self-contained stage one that reads Tima/Plus sectors through the already-installed `_Read`/`.Sony` driver and jumps to RAM-loaded stage two. Unlike the historical shim, our native stage one should have an explicit safe no-return policy once loading succeeds.
+
+### 2.5 User-provided LBA 2: HFS Master Directory Block (21 November 2026)
+
+The owner also supplied the **first 48 bytes of logical block 2** (raw file offset `0x400`) from the same historical `.dsk`. These are **HFS filesystem metadata, not more 68000 boot instructions**:
+
+~~~text
+42 44 b3 f8 18 0b e2 27 14 60 01 00 00 07 00 03
+00 00 0b 3a 00 00 02 00 00 00 08 00 00 04 00 00
+00 22 00 00 0a 53 79 73 74 65 6d 20 37 2e 30 00
+~~~
+
+Relative to **LBA 2** (not to the start of the disk), the HFS MDB has these fields, verified against [`mac_rom/include/fsequ.inc`](https://github.com/jonathanschilling/mac_rom/blob/main/include/fsequ.inc) and [Apple's public HFS format definitions](https://github.com/apple-oss-distributions/hfs/blob/main/core/hfs_format.h):
+
+| MDB offset | Field | Decoded value | Meaning |
+| --- | --- | --- | --- |
+| `0x00` | `drSigWord` | `0x4244` ('BD') | Classic HFS volume |
+| `0x0A` | `drAtrb` | `0x0100` | Volume attributes |
+| `0x0C` | `drNmFls` | 7 | Files in the root |
+| `0x0E` | `drVBMSt` | 3 | Volume bitmap begins at logical block 3 |
+| `0x10` | `drAllocPtr` | 0 | Next allocation search hint |
+| `0x12` | `drNmAlBlks` | 2874 | Number of allocation blocks |
+| `0x14` | `drAlBlkSiz` | 512 bytes | Each allocation block's size |
+| `0x18` | `drClpSiz` | 2048 bytes | Allocation clump size |
+| `0x1C` | `drAlBlSt` | 4 | First allocation block is logical LBA 4 |
+| `0x1E` | `drNxtCNID` | 34 | Next catalog node ID |
+| `0x22` | `drFreeBks` | 0 | No free allocation blocks |
+| `0x24` | `drVN` | length 10, 'System 7.0' | **HFS volume label**, not the content of the `System` file |
+
+**Important capacity mismatch with our hardware target:** 2874 × 512 = **1,471,488 bytes** allocated, beginning at LBA 4. The allocation area therefore spans LBAs **4–2877** (inclusive). Adding the usual 6 non-allocation blocks yields 2880 × 512 = **1,474,560 bytes**, which is the size of a **1.44 MB high-density floppy**; this is a **strong inference from the MDB, not a measured file length**. Standard Macintosh Plus internal Sony/IWM hardware supports **800K GCR (1600 logical blocks)**, not 1.44MB high-density MFM (which requires SuperDrive/SWIM-class hardware). The current uMac `-d` media handler also accepts **800K logical images only**. Therefore **do not use this particular sample as the source geometry for the Tima/Plus 800K packer**; reuse its boot-block entry contract and HFS insights only. Ask for or measure `stat -c '%s' disk.dsk` to settle the container size.
+
+**What continues disk loading on the historical HFS boot:** After `WaitForBootDisk` has read LBAs 0–1, the `0x4418` boot code (entered at `0x8A`) initialises `_InitEvents`/`_InitFS` and invokes **`_MountVol`** on the selected boot drive. File Manager reads **LBA 2** and other HFS structures (volume bitmap, extents and catalog B-trees) through the already-loaded `.Sony` disk driver. The boot code copies `System` into low-memory `SysResName`, invokes Resource Manager startup, and can look up a `'boot'` resource ID 2. Otherwise it jumps to a ROM-specific continuation; in Plus V3, the success continuation is near `REOPEN_RESOURCES` (`ROMBase+0x0A44`), where further System resources are loaded before the Finder is launched. These file reads **follow the HFS catalog/extents**, not sequential LBAs 3, 4, 5, …, so **LBA 2 is not executable code and the ROM does not automatically treat LBA 3 as 'stage two'.**
+
+This contrasts with **our proposed native Tima/Plus image**: stage one will use `_Read` explicitly to fetch our versioned manifest from LBA 2 and contiguous payload from LBA 3+, and **will never call `_MountVol`** in the no-HFS configuration. Both layouts are valid independently, but **cannot coexist on the same image with the same LBA 2**.
 
 ## 3. Original ROM startup and exact handoff
 
@@ -322,13 +357,13 @@ For at least one **known-booting 800K image** (prefer the same local `plus-syste
 4. Compare initial read sector ranges and code execution in an emulator trace; if version does not request execution, show that the ROM instead follows the conventional System-file path.
 5. Record whether tags are present and image format is raw or DiskCopy; **never commit historical System/ROM images**.
 
-**Expanded partial inspection received 2026-11-21:** the first 16 bytes confirm `LK`, `BRA.W` destination **`0x8A`**, version `0x4418` and zero flags; the additional stream covers `0x80–0x18F` (legacy heap settings, dispatch tables, `System`/`Finder`/`Clipboard` setup, ROM traps, `'boot'` resource lookup, `RTS`). Boot execution, full 1024-byte image, LBA 2, size and SHA-256 **remain pending**. A public candidate raw image exists in [DosFox1/OSHintosh — Mac Classic XO ROM System Disk.dsk](https://github.com/DosFox1/OSHintosh/blob/main/ROM-inator%20data/disk%20images/Mac%20Classic%20XO%20ROM%20System%20Disk.dsk) and is listed as 819,200 bytes, but its boot-block bytes and Plus V3 compatibility **have not been verified**. Prefer the already-known local working Plus disk over that unverified public candidate.
+**Expanded owner-supplied inspection 2026-11-21:** Complete 128-byte boot prefix, bytes `0x80–0x18F`, and the first 48 bytes of LBA 2 confirm `LK`, `BRA.W` destination **`0x8A`**, version `0x4418`, named boot fields and System heap values, legacy code and tables, **classic HFS MDB (`BD`) volume named `System 7.0`**. Its 2874×512-byte allocation area strongly suggests **a 1,474,560-byte high-density volume, not our 800K target**. File size/hash, complete blocks and execution traces remain pending. A public candidate raw image exists in [DosFox1/OSHintosh — Mac Classic XO ROM System Disk.dsk](https://github.com/DosFox1/OSHintosh/blob/main/ROM-inator%20data/disk%20images/Mac%20Classic%20XO%20ROM%20System%20Disk.dsk) and is listed as 819,200 bytes, but its boot-block bytes and Plus V3 compatibility **have not been verified**. Prefer the already-known local working Plus disk over that unverified public candidate.
 
 ## 8. Implementation sequence and verification gates
 
 | Gate | Deliverable | Acceptance / recorded evidence |
 | --- | --- | --- |
-| **B0 — inspection (partial)** | First 16 bytes plus stream at `0x80–0x18F` of a non-tagged `.dsk` decoded; still inspect full disk, LBA 2 and run ROM trace | `LK`, `BRA.W` → `0x8A`, `0x4418`, heap fields, ROM trap calls and 262-byte code/table region identified; remaining checks open |
+| **B0 — inspection (partial)** | Full header `0x00–0x89`, code/tables `0x8A–0x18F`, first 48 bytes of LBA 2; still inspect full media length and verify original boot trace | `LK`, entry `0x8A`, `0x4418`, seven Pascal filenames, HFS 'BD' volume `System 7.0`; **allocation area indicates 1.44MB, not 800K** |
 | **B1 — minimal boot sector** | Fixed 1024-byte boot blocks, `LK` + validated `4418`, with 68000 diagnostic code | uMac with original Plus V3 ROM and `-d new.img` reaches the diagnostic and does not attempt `_MountVol` |
 | **B2 — disk reads** | Stage one reads manifest block at LBA 2 using `_Read`, then sector pattern at LBA ≥3 | Correct bytes/`ioActCount`/status, including cross-track and cross-zone reads |
 | **B3 — complete loader** | Versioned manifest + CRC, N-sector stage-two, RAM startup/linker contract | Stage two executes from RAM and shows a unique framebuffer marker; failing CRC cannot execute |
@@ -362,3 +397,5 @@ The developer should implement **B0 and B1 only** first: inspect a verified orig
 **2026-11-21:** Located and reviewed the exact Plus ROM code paths (`WaitForBootDisk` and `BootFromDisk`), ROM `_Read` parameter-block definitions and uMac's logical 800K/DiskCopy media model. Established a two-stage native boot plan with no early HFS requirement, and identified the remaining empirical disk-image, RAM-location and execution tests.
 
 **2026-11-21, subsequent review:** Owner supplied 16 initial bytes plus `0x80–0x18F` from historical untagged media; decoded boot-block dispatch and classic Mac System/resource path. **Corrected first executable address from the earlier erroneous `0x8C` to `0x8A`**, cross-checked with Motorola BRA semantics, actual instruction alignment, a public disassembly exemplar and Plus ROM symbols. The historical code contains no `_Read` and does not implement the proposed Tima/Plus stage-two loader. This remains a design/evidence document, **not a claim that a new Tima/Plus disk has booted**.
+
+**2026-11-21, complete supplied header and LBA2:** Owner provided `0x00–0x7F` and LBA2 first 48 bytes. Recorded all seven boot-block filenames and FCB/event/heap fields; identified `BD` HFS MDB and `System 7.0` **volume name**. Calculated 2874×512-byte allocation blocks, corresponding to 1.44MB high-density geometry, **not** the target 800K. Clarified that the historical System startup mounts HFS and reads files via catalog/extents, whereas the new native bootloader uses explicitly addressed sequential sectors, with its own manifest at LBA2.
