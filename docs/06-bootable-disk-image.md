@@ -40,7 +40,7 @@ Secondary specifications: [Inside Macintosh: Boot Blocks](https://dev.os9.ca/tec
 
 **Not yet confirmed experimentally for a new Tima/Plus disk:** successfully entering our own disk code; 68000 registers and safe RAM bounds at the actual handoff; repeated ROM `_Read` calls from inside the custom stage one; executable location/relocation; multi-sector CRC and control transfer; full image boot under original ROM. These are explicit acceptance gates, **not claimed results**.
 
-**Historical disk-image evidence:** The owner has supplied the **entire first 128 bytes**, a subsequent **272-byte boot-block code/table region (`0x80–0x18F`)**, and the **first 48 bytes of LBA 2** from a non-tagged `.dsk`. Sections 2.3–2.5 decode these. The HFS MDB suggests a **1,474,560-byte 1.44 MB disk**, not an 819,200-byte 800K floppy; confirm by checking the actual file size. Neither a full boot trace nor a file hash has been supplied. The separately used local `plus-system.image` is known to boot in uMac, but must **not** be assumed to be this particular `.dsk`.
+**Historical disk-image evidence:** Two distinct images are now available as **user-supplied byte excerpts, not committed binary files**. **Sample A** (sections 2.3–2.5) has `bbVersion=0x4418`, HFS volume `System 7.0`, and an allocation map suggesting a **1,474,560-byte 1.44 MB disk**. **Sample B** (section 2.6) is from an **owner-identified 800K image** and contains a complete 1024-byte boot-block dump with `bbVersion=0x0012`. Do **not** merge these specimens or assume Sample A's LBA 2 applies to Sample B. The independently used local `plus-system.image` is known to boot in uMac; its identity relative to the samples is unconfirmed. No complete boot trace or hash has been supplied.
 
 ### 2.3 User-supplied historical boot-block bytes (complete header, 21 November 2026)
 
@@ -149,6 +149,38 @@ Relative to **LBA 2** (not to the start of the disk), the HFS MDB has these fiel
 
 This contrasts with **our proposed native Tima/Plus image**: stage one will use `_Read` explicitly to fetch our versioned manifest from LBA 2 and contiguous payload from LBA 3+, and **will never call `_MountVol`** in the no-HFS configuration. Both layouts are valid independently, but **cannot coexist on the same image with the same LBA 2**.
 
+### 2.6 Second specimen: an 800K image with old-style version `0x0012` (21 November 2026)
+
+The owner provided a **complete 2048-hex-digit (1024-byte) dump of LBAs 0 and 1** from a different, **owner-identified 800K** disk image. We parsed the actual bytes as follows:
+
+| Field | Disk offset | 800K image (Sample B) | Earlier 1.44MB-looking HFS image (Sample A) |
+| --- | --- | --- | --- |
+| Signature | `0x00` | `4C 4B` / `LK` | `4C 4B` / `LK` |
+| Branch instruction | `0x02` | `60 00 00 86`; **target `0x8A`** | Same |
+| Version | `0x06` | **`0x0012`** | **`0x4418`** |
+| Page flags | `0x08` | `0x0000` | `0x0000` |
+| System and startup app | `0x0A`, `0x5A` | `System`, `Finder` | Same |
+| First debugger name | `0x2A` | `Macsbug` | `MacsBug` |
+| Second debugger | `0x3A` | `Disassembler` | Same |
+| Startup screen | `0x4A` | `StartUpScreen` | Same |
+| Scrap name | `0x6A` | **`Clipboard File`**, length 14 | **`Clipboard`**, length 9 |
+| FCB/event counts | `0x7A`, `0x7C` | 10 / 20 | 10 / 20 |
+| 128K system heap | `0x7E` | `0x00004300` | Same |
+| 256K heap | `0x82` | `0x00008000` | Same |
+| 512K+ system heap | `0x86` | **`0x0000C000`** | **`0x00020000`** |
+
+**Decisive observation:** The Plus V3 ROM tests **byte `+0x06 == 0x44`** before executing `JSR 2(A6)`. The old-format `0x0012` version has byte `+0x06 == 0x00`, so **the Plus V3 ROM does not execute this disk's embedded 68000 code**, even though it has the same `BRA.W` to `0x8A`. It instead continues at `SKIP_SECONDARY_BOOT` in the original ROM. That routine compares the whole version word with `0x0014`; because `0x0012 <= 0x0014`, it **overrides the disk header's `0xC000` 512K+ heap field with `0xB700`**, then continues conventional ROM startup (`_InitEvents`, `_InitFS`, `_MountVol`, System resources). This is why a working old-style Macintosh boot image **does not demonstrate disk-supplied code execution** on our target.
+
+Apple's [Inside Macintosh boot-block specification](https://dev.os9.ca/techpubs/mac/Files/Files-101.html) independently distinguishes legacy versions: if the version's high byte has bit 7 **clear**, boot code is only executed under the old exception with low version byte **`0x0D`**; later flag-dependent boot code is a different scheme. Our **exact Plus V3 ROM disassembly remains the binding contract** for the `0x44`-high-byte stage-one prototype. Merely including a branch and a large executable-looking region does not enable execution.
+
+**What is in the 1024-byte sample?** At `0x8A` the first instruction bytes are **`22 38 01 08`** (`MOVE.L ($0108).W,D1`), rather than the prior sample's `4A 78 02 8E`. The second specimen packs far more instructions and data into both boot sectors, with apparent Toolbox/OS trap words such as `A00F` (`_MountVol` at `0x174`), `A02E` (`_BlockMove` at `0x188`), `A995` (`_InitResources` at `0x1CE`) and `A002` (`_Read` at **`0x390`**), as well as `A001` (`_Write` at **`0x396`**). Those opcode locations are byte matches in the owner-supplied dump, **not a full control-flow disassembly**; some paths may be unreachable on a given ROM variant. The final visible `RTS` is at `0x3E4` (`4E 75`).
+
+**Unexpected embedded template:** At **offset `0x3E6`**, inside LBA 1, the dump contains a **second** sequence `4C 4B 60 00 00 86 00 14 00 00 06 53 79 73 74 65 6D ...` — an `LK` header-like fragment carrying `0x0014` and `System`. It is **not at the physical start of a sector** (LBA 1 begins at `0x200`), so it must not be mistaken for another bootable disk-sector header; it is embedded data within the 1024-byte region. Its precise use needs a control-flow review and/or original-ROM trace before claiming it is copied, patched, or written.
+
+**Implications for our custom boot:** The Plus already knows how to boot a conventional old-format System disk **without executing its resident 68000 routine**. Our native Tima/Plus loader must deliberately use an **executable** version value (for initial Plus V3: `0x4418`) and a self-contained stage one at `0x8A`. Conversely, if we pursue the alternative HFS-compatible System-file route, this `0x0012` image demonstrates the no-boot-block-code path, so that is a legitimate separate strategy.
+
+**Remaining evidence for Sample B:** The supplied 1024 bytes cover **both complete boot blocks**. A sample of **LBA 2** would establish whether this particular 800K image is HFS (`BD`) or MFS (`D2D7`), as distinct from Sample A's known HFS MDB. The actual file size and original-ROM execution trace are not independently measured.
+
 ## 3. Original ROM startup and exact handoff
 
 The relevant flow, reconstructed from `vectors.s` and `boot_load.s`:
@@ -179,7 +211,7 @@ MC68000 reset; ROM overlay active
            find System/Finder, load resources, launch app
 ~~~
 
-**Important:** this is the **Plus ROM disassembly's specific test** (`CMPI.B #0x44,0x6(A6)`), not merely the generic later documentation's 'bit 6 is set' wording. Use a known-compatible test version such as **`0x4418`** for our initial hardware target, then verify the entire first 8 bytes in the image. Preserve this ROM-specific choice as a testable invariant; it is not automatically portable to every Macintosh ROM.
+**Important:** this is the **Plus ROM disassembly's specific test** (`CMPI.B #0x44,0x6(A6)`), not merely the generic later documentation's 'bit 6 is set' wording. Use an executable version such as **`0x4418`** for our initial hardware target, then verify the entire first 8 bytes in the image. **The now-inspected 800K Sample B carries `0x0012`; Plus V3 explicitly skips its embedded code and replaces its 512K+ heap parameter with `0xB700`.** Preserve this ROM-specific choice as a testable invariant; it is not automatically portable to every Macintosh ROM.
 
 `JSR 0x2(A6)` runs a **68000 instruction** at offset `+2`, not a dereference of a 32-bit absolute pointer. The four bytes starting at `+2` should contain a fixed-size branch instruction (`BRA.W stage1_entry`, or equivalent) to the actual code beyond the header. **Force its width** so it occupies four bytes and does not move the version field away from `+6`.
 
@@ -408,4 +440,6 @@ The developer should implement **B0 and B1 only** first: inspect a verified orig
 
 **2026-11-21, subsequent review:** Owner supplied 16 initial bytes plus `0x80–0x18F` from historical untagged media; decoded boot-block dispatch and classic Mac System/resource path. **Corrected first executable address from the earlier erroneous `0x8C` to `0x8A`**, cross-checked with Motorola BRA semantics, actual instruction alignment, a public disassembly exemplar and Plus ROM symbols. The historical code contains no `_Read` and does not implement the proposed Tima/Plus stage-two loader. This remains a design/evidence document, **not a claim that a new Tima/Plus disk has booted**.
 
-**2026-11-21, complete supplied header and LBA2:** Owner provided `0x00–0x7F` and LBA2 first 48 bytes. Recorded all seven boot-block filenames and FCB/event/heap fields; identified `BD` HFS MDB and `System 7.0` **volume name**. Calculated 2874×512-byte allocation blocks, corresponding to 1.44MB high-density geometry, **not** the target 800K. Clarified that the historical System startup mounts HFS and reads files via catalog/extents, whereas the new native bootloader uses explicitly addressed sequential sectors, with its own manifest at LBA2.
+**2026-11-21, complete supplied header and LBA2 (Sample A):** Owner provided `0x00–0x7F` and LBA2 first 48 bytes. Recorded all seven boot-block filenames and FCB/event/heap fields; identified `BD` HFS MDB and `System 7.0` **volume name**. Calculated 2874×512-byte allocation blocks, corresponding to 1.44MB high-density geometry, **not** the target 800K. Clarified that the historical System startup mounts HFS and reads files via catalog/extents, whereas the new native bootloader uses explicitly addressed sequential sectors, with its own manifest at LBA2.
+
+**2026-11-21, second 800K specimen (Sample B):** Owner supplied exactly 1024 bytes of boot blocks, version `0x0012`, 512K+ heap setting `0xC000`, longer embedded 68000 code and an internal `LK`/`0x0014` template at `0x3E6`. Original Plus V3 ROM's exact `0x44` test **does not enter this code** and its legacy heap branch substitutes `0xB700`; this difference is critical for the native Tima/Plus design. LBA2 filesystem data for Sample B is still unknown.
