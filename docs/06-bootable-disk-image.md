@@ -40,7 +40,27 @@ Secondary specifications: [Inside Macintosh: Boot Blocks](https://dev.os9.ca/tec
 
 **Not yet confirmed experimentally for a new Tima/Plus disk:** successfully entering our own disk code; 68000 registers and safe RAM bounds at the actual handoff; repeated ROM `_Read` calls from inside the custom stage one; executable location/relocation; multi-sector CRC and control transfer; full image boot under original ROM. These are explicit acceptance gates, **not claimed results**.
 
-**Historical disk-image evidence still required:** an existing bootable raw 800K Macintosh Plus `.image` or `.dsk`, or a DiskCopy 4.2 `.image` with validated conversion. The project's previously used `plus-system.image` (local, not checked into Git) is the best initial reference because it is already known to boot in uMac. No byte-for-byte inspection of that private/local image has been performed while authoring this document. Do not invent its header values, filesystem type or hash.
+**Historical disk-image evidence:** a user-provided 16-byte prefix from a non-tagged `.dsk` is now decoded below (signature, branch, version and beginning of System name). It is **not** a full header, disassembly, hash, filesystem or successful boot trace. The project's previously used `plus-system.image` (local, not checked into Git) is independently known to boot in uMac, but it has not been established that this `.dsk` excerpt is from that exact file. Do not assume that identity or invent its other values.
+
+### 2.3 User-supplied historical boot-block bytes (partial inspection, 21 November 2026)
+
+The owner supplied the **first 16 data bytes** from a **non-tagged** Macintosh `.dsk` image. This is partial source-media evidence; the full original image remains outside Git.
+
+```text
+Offset    Bytes             Meaning
+0x0000    4C 4B             bbID = 'LK' (accepted by Plus ROM)
+0x0002    60 00 00 86       68000 BRA.W +0x0086 (bbEntry)
+0x0006    44 18             bbVersion = 0x4418
+0x0008    00 00             bbPageFlags = 0
+0x000A    06                Pascal System name length = 6
+0x000B    53 79 73 74 65    'Syste'; following 'm' is beyond the supplied bytes
+```
+
+**Key finding:** at `A6+0x02` the ROM's `JSR 0x2(A6)` executes the four-byte `BRA.W` instruction. Its `0x0086` displacement targets **boot-block offset `0x008C`**, immediately after the 140-byte legacy boot header. The byte at offset `+6` is exactly `0x44`, satisfying the actual Plus V3 ROM's executable-boot-code test. [CiderPress II's HFS notes](https://ciderpress2.com/formatdoc/HFS-notes.html) independently document the **same** `60 00 00 86` encoding and `0x8C` destination. This substantially strengthens the proposed entry-point layout in §4.
+
+The owner's preliminary inspection suggests **approximately 350 bytes of instructions** in the 1024-byte boot area, which is plausible for a short first-stage loader, but is **not yet disassembled or independently measured**. Do not infer from this alone what the code does, whether it calls `_Read`, or where the actual code ends. A raw byte dump of the region beginning at `0x008C` is the next useful input; e.g. `xxd -g 1 -s 0x8c -l 0x180 example.dsk` (384 bytes).
+
+**Still pending for this specimen:** complete boot blocks, the remaining `System` filename byte, volume header at LBA 2, total image size and SHA-256, validation that this specific file boots in uMac, and disassembly/ROM-trap traces of its stage-one code.
 
 ## 3. Original ROM startup and exact handoff
 
@@ -251,13 +271,13 @@ For at least one **known-booting 800K image** (prefer the same local `plus-syste
 4. Compare initial read sector ranges and code execution in an emulator trace; if version does not request execution, show that the ROM instead follows the conventional System-file path.
 5. Record whether tags are present and image format is raw or DiskCopy; **never commit historical System/ROM images**.
 
-At document creation these values are **PENDING IMAGE INSPECTION**. A public candidate raw image exists in [DosFox1/OSHintosh — Mac Classic XO ROM System Disk.dsk](https://github.com/DosFox1/OSHintosh/blob/main/ROM-inator%20data/disk%20images/Mac%20Classic%20XO%20ROM%20System%20Disk.dsk) and is listed as 819,200 bytes, but its boot-block bytes and Plus V3 compatibility **have not been verified**. Prefer the already-known local working Plus disk over that unverified public candidate.
+**Partial inspection received 2026-11-21:** the 16-byte specimen in §2.3 confirms the `LK` signature, `BRA.W` destination `0x8C`, version `0x4418` and zero page flags. All other items in this checklist **remain pending**. A public candidate raw image exists in [DosFox1/OSHintosh — Mac Classic XO ROM System Disk.dsk](https://github.com/DosFox1/OSHintosh/blob/main/ROM-inator%20data/disk%20images/Mac%20Classic%20XO%20ROM%20System%20Disk.dsk) and is listed as 819,200 bytes, but its boot-block bytes and Plus V3 compatibility **have not been verified**. Prefer the already-known local working Plus disk over that unverified public candidate.
 
 ## 8. Implementation sequence and verification gates
 
 | Gate | Deliverable | Acceptance / recorded evidence |
 | --- | --- | --- |
-| **B0 — inspection** | Parse one original booting disk and record header, image hashes, structure and ROM trace | Real byte values replace the pending checklist; no source ROM modification |
+| **B0 — inspection (partial)** | First 16 bytes of a non-tagged `.dsk` decoded; still parse the complete original booting disk and record hash, structure, stage-one code and ROM trace | `LK`, `BRA.W` → `0x8C`, `0x4418` and flags confirmed from provided bytes; remaining checks open |
 | **B1 — minimal boot sector** | Fixed 1024-byte boot blocks, `LK` + validated `4418`, with 68000 diagnostic code | uMac with original Plus V3 ROM and `-d new.img` reaches the diagnostic and does not attempt `_MountVol` |
 | **B2 — disk reads** | Stage one reads manifest block at LBA 2 using `_Read`, then sector pattern at LBA ≥3 | Correct bytes/`ioActCount`/status, including cross-track and cross-zone reads |
 | **B3 — complete loader** | Versioned manifest + CRC, N-sector stage-two, RAM startup/linker contract | Stage two executes from RAM and shows a unique framebuffer marker; failing CRC cannot execute |
