@@ -61,6 +61,9 @@ offset in the emulator's `ram.bin`. No Apple ROM or System Software is needed.
   test project or the commit.
 - **2026-11-21 — Status Change:** Ready for owner review based on the
   emulator acceptance test. No physical ROM or board was tested.
+- **2026-11-21 — Local commit:** Recorded implementation and verification
+  in `21eef1d` on `pre-release-rom-test`. Owner review and approval are
+  pending.
 
 **Proposed Change**
 
@@ -75,6 +78,7 @@ the exact bytes at offset `1024` of a fresh 4 MiB `ram.bin`.
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `pre-release-rom-test` | `21eef1d` | `UNREVIEWED` | Build and boot Tima Boot, add the uMac raw-ROM opt-in, and verify the RAM marker. |
 
 **Resolution Description**
 
