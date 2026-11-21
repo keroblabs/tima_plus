@@ -8,7 +8,7 @@
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current totals:** 5 registered / 0 OPEN / 0 IN_PROGRESS / 1 REVIEW / 0 RESOLVED / 4 CLOSED / 0 DEFERRED.
+**Current totals:** 6 registered / 0 OPEN / 0 IN_PROGRESS / 2 REVIEW / 0 RESOLVED / 4 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -23,6 +23,12 @@ No tickets formally opened under this category.
 | [`PLUS-EMU-0005`](db/PLUS-EMU-0005.md) | `TASK` | `CLOSED` | Emulate a SCSI hard disk backed by a BlueSCSI-compatible image | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0005.md) |
 | [`PLUS-EMU-0009`](db/PLUS-EMU-0009.md) | `BUG` | `CLOSED` | Implement Macintosh Plus serial RTC and battery-backed PRAM | [PLUS-DEV-0002](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-EMU-0009.md) |
 | [`PLUS-EMU-0010`](db/PLUS-EMU-0010.md) | `TASK` | `REVIEW` | Add IWM write handling and persistent virtual floppy writes | [PLUS-DEV-0004](../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) | [Details and history](db/PLUS-EMU-0010.md) |
+
+## PLUS-ROM — Standalone firmware tests on the M0001AP hardware model
+
+| ID | Kind | Status | Title | Milestone | Ticket |
+| --- | --- | --- | --- | --- | --- |
+| [`PLUS-ROM-0001`](db/PLUS-ROM-0001.md) | `TASK` | `REVIEW` | Boot a standalone test ROM and record its RAM marker | [PLUS-DEV-0002 hardware profile](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-ROM-0001.md) |
 
 ## PLUS-SYS — Tima/Plus boot, storage, OS and desktop
 

@@ -117,6 +117,13 @@ The RAM is actually a memory-mapped file, which can be useful for
 see the current state.  For example, you can capture screenshots from
 screen memory (see `tools/mem2scr.c`).
 
+For standalone firmware tests, use `--raw-rom -r /path/to/test.rom`.
+This opt-in accepts a regular 128 KiB raw 68000 reset image without the
+Plus V3 checksum. It does not change the hardware map or the default
+Macintosh ROM checks. Use a separate working directory: uMac truncates
+`ram.bin` on each launch. See [Tima Boot](../tima_boot/) for a test image
+that writes a known marker into the file.
+
 For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
 
 Use `-W loaded.rom` to dump the loaded ROM bytes for comparison with the

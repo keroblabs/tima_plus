@@ -1,6 +1,6 @@
 /* umac SDL2 main application
  *
- * Opens an SDL2 window, allocates RAM/loads and patches ROM, routes
+ * Opens an SDL2 window, allocates RAM/loads the ROM, routes
  * mouse/keyboard updates to umac, and blits framebuffer to the
  * display.
  *
@@ -58,7 +58,8 @@ static void     print_help(char *n)
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
                "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
                "\t-i\t\t\tDisassembled instruction trace\n"
-               "\t--trace-iwm\t\tTrace IWM and Sony drive events\n", n);
+               "\t--trace-iwm\t\tTrace IWM and Sony drive events\n"
+               "\t--raw-rom\t\tBoot a 128 KiB raw reset ROM instead of a Plus V3 ROM\n", n);
 }
 
 #define DISP_SCALE      2
@@ -232,6 +233,7 @@ int     main(int argc, char *argv[])
         int ch;
         int opt_disassemble = 0;
         bool opt_iwm_trace = false;
+        bool raw_rom = false;
         bool floppy_write = false;
         const char *scsi_filename = NULL;
         int scsi_id = -1;
@@ -245,6 +247,7 @@ int     main(int argc, char *argv[])
 
         const struct option long_options[] = {
                 {"trace-iwm", no_argument, NULL, 'I'},
+                {"raw-rom", no_argument, NULL, 'R'},
                 {0}
         };
         while ((ch = getopt_long(argc, argv, "r:d:W:s:t:P:ihwp", long_options, NULL)) != -1) {
@@ -267,6 +270,10 @@ int     main(int argc, char *argv[])
 
                 case 'I':
                         opt_iwm_trace = true;
+                        break;
+
+                case 'R':
+                        raw_rom = true;
                         break;
 
                 case 'W':
@@ -429,7 +436,7 @@ int     main(int argc, char *argv[])
 
         struct stat sb;
         if (fstat(ofd, &sb) || !S_ISREG(sb.st_mode) || sb.st_size != ROM_SIZE) {
-                fprintf(stderr, "ROM '%s': expected a 128 KiB Macintosh Plus ROM\n", rom_filename);
+                fprintf(stderr, "ROM '%s': expected a regular 128 KiB ROM file\n", rom_filename);
                 close(ofd);
                 free(pram_path);
                 return 1;
@@ -441,14 +448,17 @@ int     main(int argc, char *argv[])
                 free(pram_path);
                 return 1;
         }
-        if (!rom_is_plus_v3(rom_base)) {
+        if (!raw_rom && !rom_is_plus_v3(rom_base)) {
                 fprintf(stderr, "ROM '%s': expected Macintosh Plus V3 with checksum %08" PRIx32 "\n",
                         rom_filename, ROM_PLUS_V3_CHECKSUM);
                 munmap(rom_base, ROM_SIZE);
                 free(pram_path);
                 return 1;
         }
-        printf("Macintosh Plus V3 ROM, checksum %08" PRIx32 "\n", ROM_PLUS_V3_CHECKSUM);
+        if (raw_rom)
+                puts("Raw reset ROM (Macintosh Plus V3 check disabled)");
+        else
+                printf("Macintosh Plus V3 ROM, checksum %08" PRIx32 "\n", ROM_PLUS_V3_CHECKSUM);
 
         floppy = floppy_write ? disk_img_open_writable(disc_filename) : disk_img_open(disc_filename);
         if (!floppy) {
