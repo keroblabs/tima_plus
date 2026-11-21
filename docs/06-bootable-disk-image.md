@@ -42,9 +42,9 @@ Secondary specifications: [Inside Macintosh: Boot Blocks](https://dev.os9.ca/tec
 
 **Historical disk-image evidence:** a user-provided 16-byte prefix from a non-tagged `.dsk` is now decoded below (signature, branch, version and beginning of System name). It is **not** a full header, disassembly, hash, filesystem or successful boot trace. The project's previously used `plus-system.image` (local, not checked into Git) is independently known to boot in uMac, but it has not been established that this `.dsk` excerpt is from that exact file. Do not assume that identity or invent its other values.
 
-### 2.3 User-supplied historical boot-block bytes (partial inspection, 21 November 2026)
+### 2.3 User-supplied historical boot-block bytes (inspection expanded, 21 November 2026)
 
-The owner supplied the **first 16 data bytes** from a **non-tagged** Macintosh `.dsk` image. This is partial source-media evidence; the full original image remains outside Git.
+The owner supplied the **first 16 data bytes** and then **272 additional bytes covering absolute offsets `0x80–0x18F`** from a **non-tagged** Macintosh `.dsk` image. This is partial source-media evidence; the full original image remains outside Git.
 
 ```text
 Offset    Bytes             Meaning
@@ -56,11 +56,63 @@ Offset    Bytes             Meaning
 0x000B    53 79 73 74 65    'Syste'; following 'm' is beyond the supplied bytes
 ```
 
-**Key finding:** at `A6+0x02` the ROM's `JSR 0x2(A6)` executes the four-byte `BRA.W` instruction. Its `0x0086` displacement targets **boot-block offset `0x008C`**, immediately after the 140-byte legacy boot header. The byte at offset `+6` is exactly `0x44`, satisfying the actual Plus V3 ROM's executable-boot-code test. [CiderPress II's HFS notes](https://ciderpress2.com/formatdoc/HFS-notes.html) independently document the **same** `60 00 00 86` encoding and `0x8C` destination. This substantially strengthens the proposed entry-point layout in §4.
+**Critical correction (verified against actual executable bytes):** at `A6+0x02` the ROM's `JSR 0x2(A6)` executes the four-byte `BRA.W` instruction. On MC68000, its `0x0086` displacement is relative to **opcode address +2**, i.e. `0x0004`, so **target `0x0004 + 0x0086 = 0x008A`**, not `0x008C`. At `0x8A`, the specimen begins `4A 78 02 8E` (`TST.W ($028E).W`, the `ROM85` low-memory word); `0x8C` is the address **extension word** of that first instruction and not an executable start. The byte at offset `+6` is `0x44`, satisfying the Plus V3 ROM's executable-boot-code condition. This agrees with Motorola's [M68000 Programmer's Reference Manual (BRA instruction)](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf) and a [standalone 68000 Macintosh boot-block assembly example](https://gist.github.com/LongJohnCoder/503ccc12789483d68086c955de67b4a7) which places `start` immediately after `bbSysHeapSize`. **Note:** CiderPress II's HFS notes describe the same encoding but calculate `0x8C`; that contradicts the machine-code boundary observed here. Avoid copying that erroneous destination into our assembler or image validator.
 
-The owner's preliminary inspection suggests **approximately 350 bytes of instructions** in the 1024-byte boot area, which is plausible for a short first-stage loader, but is **not yet disassembled or independently measured**. Do not infer from this alone what the code does, whether it calls `_Read`, or where the actual code ends. A raw byte dump of the region beginning at `0x008C` is the next useful input; e.g. `xxd -g 1 -s 0x8c -l 0x180 example.dsk` (384 bytes).
+**Measured region:** the supplied 272-byte stream begins at `0x80`. Its first ten bytes finish the old-style header (through offset `0x89`). Executable code and embedded lookup tables span `0x8A–0x18F` (**262 bytes total**), ending with `4E 75` (`RTS`) at `0x18E`. The owner reports that subsequent bytes repeat `0xDA` (padding), consistent with a published, byte-for-byte **matching first-sector specimen** in [a November 2022 MacRumors boot-block dump](https://forums.macrumors.com/threads/question-how-powerful-of-a-graphics-card-will-work-in-a-beige-power-macintosh-g3.2303689/page-31), which displays the same bytes from offset `0x80` through `0x18F` and `DA` padding at `0x190–0x1FF`. **This does not establish that the owner's `.dsk` is the same disk or that its whole image is valid.** The code itself is partly instructions and partly embedded ROM-version tables, not 262 consecutive instruction bytes.
 
 **Still pending for this specimen:** complete boot blocks, the remaining `System` filename byte, volume header at LBA 2, total image size and SHA-256, validation that this specific file boots in uMac, and disassembly/ROM-trap traces of its stage-one code.
+
+### 2.4 Decoding the actual legacy boot-block program (0x8A–0x18F)
+
+**Purpose:** The supplied historical first-stage code is a *Macintosh System startup compatibility shim*, **not a raw block loader**. It uses many ROM traps but contains **no `_Read` (`A002`)** instruction in the available code. Rather than read a kernel from LBA 2+, it initialises classic Macintosh managers, mounts the boot volume, and either jumps to a ROM-specific continuation or a `'boot'` resource. This behaviour must **not** be copied indiscriminately into the Tima/Plus native boot stub.
+
+**First instructions and dispatch:**
+
+~~~asm
+008A: 4A78 028E      TST.W   ($028E).W          ; ROM85 flag
+008E: 6B46           BMI.S   $00D6              ; error path
+0090: 2078 02AE      MOVEA.L ($02AE).W,A0       ; ROMBase
+0094: 3228 0008      MOVE.W  $0008(A0),D1       ; ROM machine/version word
+0098: 7CFE           MOVEQ   #-2,D6
+009A: 5446           ADDQ.W  #2,D6
+009C: 303B 603C      MOVE.W  (0x3C,PC,D6.W),D0 ; ROM-version table at $DA
+00A0: 6758           BEQ.S   $00FA              ; unknown/sentinel version
+00A2: B240           CMP.W   D0,D1
+00A4: 66F4           BNE.S   $009A              ; scan next table entry
+...
+00BC: 584F           ADDQ.W  #4,A7              ; discard original JSR return
+00BE: 2E0F           MOVE.L  A7,D7              ; save stack/IOParam position
+00C0: 6138           BSR.S   $00FA              ; common startup helper
+00C2: 323B 6022      MOVE.W  (0x22,PC,D6.W),D1 ; success ROM-offset table at $E6
+00C6: 4A40           TST.W   D0                 ; helper result
+00C8: 6704           BEQ.S   $00CE
+00CA: 323B 6024      MOVE.W  (0x24,PC,D6.W),D1 ; failure ROM-offset table at $F0
+00CE: 2078 02AE      MOVEA.L ($02AE).W,A0     ; ROMBase
+00D2: 4EF0 1000      JMP     (0,A0,D1.W)      ; continue *inside* ROM
+00D6: 7062           MOVEQ   #$62,D0
+00D8: A9C9           _SysError
+~~~
+
+For Macintosh Plus V3, the ROM machine/version word at `ROMBase+8` is **`0x0075`**, matching the **first table entry at `0xDA`** (`D6 = 0`). Its two ROM continuation offsets are `0x0A44` (success; within the ROM's resource-startup sequence near `REOPEN_RESOURCES`) and `0x0B82` (error; maps to `MOUNT_FAILED_EJECT` in the Plus V3 symbol map). This is a strong independent confirmation that the shim is returning control to the ROM startup process rather than loading raw sectors itself.
+
+The code also conditionally adjusts `SysZone`/`_SetApplBase` using the boot header longword at `0x86` (`0x00020000` in this specimen). The data bytes between `0xDA` and `0xF9` are **lookup tables**, not independent executable instructions. Do not blindly linear-disassemble through this area.
+
+**Common helper at `0xFA` (major calls):**
+
+| Offset | Key bytes/trap | Interpreted operation |
+| --- | --- | --- |
+| `0xFA–0x104` | `LEA` of header `+0x0A`, `A02E` | Copy 16-byte `System` Pascal string to `SysResName` at `0x0AD8` |
+| `0x106–0x110` | `LEA` of header `+0x1A`, `A02E` | Copy `Finder` name to `FinderName` at `0x02E0` |
+| `0x112–0x120` | `LEA` of header `+0x6A`, `A02E` | Copy Scrap/Clipboard name; initialise `ScrapName` pointer `0x096C` and data at `0x0970` |
+| `0x122–0x12C` | `A06D`, `A06C` | `_InitEvents` using header `+0x7C`, `_InitFS` using header `+0x7A` |
+| `0x12E–0x138` | `A00F` | Set boot volume refNum from `BootDrive` (`0x0210`); `_MountVol` |
+| `0x13A–0x160` | `A207`, `A260`, `A015` | `_HGetVInfo`, process blessed folder and working directory (`'ERIK'`), `_SetVol` |
+| `0x162–0x182` | `A995`, `A9A0`, `4ED0` | `_InitResources`, request **resource type `'boot'`, ID `2`**, then jump through resource handle if present |
+| `0x184–0x18E` | `A00E`, `4E75` | Error cleanup via `_UnmountVol`; return `RTS` |
+
+Trap names and low-memory symbols are cross-referenced against [`mac_rom/include/traps.inc`](https://github.com/jonathanschilling/mac_rom/blob/main/include/traps.inc), [`include/lowmem.inc`](https://github.com/jonathanschilling/mac_rom/blob/main/include/lowmem.inc) and [the published `_UnmountVol` trap listing](https://vintageapple.org/macprogramming/pdf/Inside_Macintosh_X-Ref_1988.pdf). The listing is a manual, control-flow-aware decode of the supplied bytes; exact execution branches and resource availability remain **untraced in uMac**.
+
+**Design consequence for Tima/Plus:** Preserve the **ROM's 1024-byte read + `LK` + `0x44` + branch mechanism**. Replace this legacy Macintosh manager/resource logic with a much smaller, self-contained stage one that reads Tima/Plus sectors through the already-installed `_Read`/`.Sony` driver and jumps to RAM-loaded stage two. Unlike the historical shim, our native stage one should have an explicit safe no-return policy once loading succeeds.
 
 ## 3. Original ROM startup and exact handoff
 
@@ -122,12 +174,11 @@ Logical Macintosh floppy blocks are 512 bytes each. The **first two blocks, 0 an
 | `7E` | 4 | `bb128KSHeap` | System heap setting |
 | `82` | 4 | `bb256KSHeap` | Reserved/legacy |
 | `86` | 4 | `bbSysHeapSize` | Heap size for ≥512K Macintosh |
-| `8A` | 2 | Filler | Usually zero |
-| `8C` | optional 4 | `bbSysHeapExtra` | Additional newer-style header field |
-| `90` | optional 4 | `bbSysHeapFract` | Additional newer-style header field |
-| `8C` or `94` | remainder | First-stage code | Old- vs new-style header length; explicitly branch to chosen offset |
+| `8A` | remainder | **First-stage code (old style)** | **Actual entry in the supplied `0x4418` boot block.** `4A78 028E` starts here |
 
-For our **first `0x4418` experiment**, use the old-style header through `+0x8B`, starting code at `+0x8C`; explicitly branch from `+2` to `stage1_entry`. Both blocks together give 1024 bytes, so this leaves approximately 884 bytes for code and static data. All offsets and sizes must be checked by the assembler/linker and host-side image validator. Do not let a changing instruction size or compiler padding silently move fields.
+In this tested old-style header layout, offsets `0x82–0x85` contain `00 00 80 00` (legacy heap parameter), `0x86–0x89` contain `00 02 00 00` (SysHeapSize), and instruction bytes begin **immediately at `0x8A`**. Newer-style formats may extend the header; such formats need a separate versioned definition rather than overlaying extra fields on these old-style instructions.
+
+For our **first `0x4418` experiment**, use the old-style header through **`+0x89`**, starting code at **`+0x8A`**. The fixed-width `BRA.W` at `+2` must encode `60 00 00 86`: Motorola's branch PC base is `+4`, so the target is `+0x8A`. Both boot blocks together provide 1024 bytes; **886 bytes** remain for code/data from `0x8A` to `0x3FF`. Assert all offsets in the builder, not just the assembled file length. In the real specimen the code/tables end at `0x18F`, and the remaining bytes are padded with `0xDA`.
 
 **Compatibility warning:** Apple's later general boot-block format describes version high-byte bits and two header styles, but the Plus V3 code cited above compares for **`0x44`** exactly. That legacy-specific value includes bits not described as general-purpose in later documentation. Our implementation must prioritise observed ROM behaviour and an empirical known-good reference over spec-based guesses.
 
@@ -271,13 +322,13 @@ For at least one **known-booting 800K image** (prefer the same local `plus-syste
 4. Compare initial read sector ranges and code execution in an emulator trace; if version does not request execution, show that the ROM instead follows the conventional System-file path.
 5. Record whether tags are present and image format is raw or DiskCopy; **never commit historical System/ROM images**.
 
-**Partial inspection received 2026-11-21:** the 16-byte specimen in §2.3 confirms the `LK` signature, `BRA.W` destination `0x8C`, version `0x4418` and zero page flags. All other items in this checklist **remain pending**. A public candidate raw image exists in [DosFox1/OSHintosh — Mac Classic XO ROM System Disk.dsk](https://github.com/DosFox1/OSHintosh/blob/main/ROM-inator%20data/disk%20images/Mac%20Classic%20XO%20ROM%20System%20Disk.dsk) and is listed as 819,200 bytes, but its boot-block bytes and Plus V3 compatibility **have not been verified**. Prefer the already-known local working Plus disk over that unverified public candidate.
+**Expanded partial inspection received 2026-11-21:** the first 16 bytes confirm `LK`, `BRA.W` destination **`0x8A`**, version `0x4418` and zero flags; the additional stream covers `0x80–0x18F` (legacy heap settings, dispatch tables, `System`/`Finder`/`Clipboard` setup, ROM traps, `'boot'` resource lookup, `RTS`). Boot execution, full 1024-byte image, LBA 2, size and SHA-256 **remain pending**. A public candidate raw image exists in [DosFox1/OSHintosh — Mac Classic XO ROM System Disk.dsk](https://github.com/DosFox1/OSHintosh/blob/main/ROM-inator%20data/disk%20images/Mac%20Classic%20XO%20ROM%20System%20Disk.dsk) and is listed as 819,200 bytes, but its boot-block bytes and Plus V3 compatibility **have not been verified**. Prefer the already-known local working Plus disk over that unverified public candidate.
 
 ## 8. Implementation sequence and verification gates
 
 | Gate | Deliverable | Acceptance / recorded evidence |
 | --- | --- | --- |
-| **B0 — inspection (partial)** | First 16 bytes of a non-tagged `.dsk` decoded; still parse the complete original booting disk and record hash, structure, stage-one code and ROM trace | `LK`, `BRA.W` → `0x8C`, `0x4418` and flags confirmed from provided bytes; remaining checks open |
+| **B0 — inspection (partial)** | First 16 bytes plus stream at `0x80–0x18F` of a non-tagged `.dsk` decoded; still inspect full disk, LBA 2 and run ROM trace | `LK`, `BRA.W` → `0x8A`, `0x4418`, heap fields, ROM trap calls and 262-byte code/table region identified; remaining checks open |
 | **B1 — minimal boot sector** | Fixed 1024-byte boot blocks, `LK` + validated `4418`, with 68000 diagnostic code | uMac with original Plus V3 ROM and `-d new.img` reaches the diagnostic and does not attempt `_MountVol` |
 | **B2 — disk reads** | Stage one reads manifest block at LBA 2 using `_Read`, then sector pattern at LBA ≥3 | Correct bytes/`ioActCount`/status, including cross-track and cross-zone reads |
 | **B3 — complete loader** | Versioned manifest + CRC, N-sector stage-two, RAM startup/linker contract | Stage two executes from RAM and shows a unique framebuffer marker; failing CRC cannot execute |
@@ -308,4 +359,6 @@ The developer should implement **B0 and B1 only** first: inspect a verified orig
 
 ### Research record
 
-**2026-11-21:** Located and reviewed the exact Plus ROM code paths (`WaitForBootDisk` and `BootFromDisk`), ROM `_Read` parameter-block definitions and uMac's logical 800K/DiskCopy media model. Established a two-stage native boot plan with no early HFS requirement, and identified the remaining empirical disk-image, RAM-location and execution tests. This document is an implementation plan, **not a claim that a Tima/Plus boot image has already run**.
+**2026-11-21:** Located and reviewed the exact Plus ROM code paths (`WaitForBootDisk` and `BootFromDisk`), ROM `_Read` parameter-block definitions and uMac's logical 800K/DiskCopy media model. Established a two-stage native boot plan with no early HFS requirement, and identified the remaining empirical disk-image, RAM-location and execution tests.
+
+**2026-11-21, subsequent review:** Owner supplied 16 initial bytes plus `0x80–0x18F` from historical untagged media; decoded boot-block dispatch and classic Mac System/resource path. **Corrected first executable address from the earlier erroneous `0x8C` to `0x8A`**, cross-checked with Motorola BRA semantics, actual instruction alignment, a public disassembly exemplar and Plus ROM symbols. The historical code contains no `_Read` and does not implement the proposed Tima/Plus stage-two loader. This remains a design/evidence document, **not a claim that a new Tima/Plus disk has booted**.
