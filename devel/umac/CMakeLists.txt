@@ -5,6 +5,7 @@ project(${PROJECT_NAME} LANGUAGES C)
 include(CTest)
 
 set(MEMSIZE "4096" CACHE STRING "Emulated RAM size in KiB")
+option(UMAC_DEVELOPMENT_DUART "Build the MC68681 development UART" ON)
 
 find_package(SDL2 CONFIG REQUIRED)
 
@@ -34,7 +35,6 @@ add_custom_command(
 add_library(umac_core STATIC
     src/disk_img.c
     src/iwm.c
-    src/m68681_emulator.c
     src/main.c
     src/rom.c
     src/rtc.c
@@ -50,6 +50,11 @@ add_library(umac_core STATIC
     "${MUSASHI_GENERATED_DIR}/m68kops.h"
     "${MUSASHI_DIR}/softfloat/softfloat.c"
 )
+
+if(UMAC_DEVELOPMENT_DUART)
+    target_sources(umac_core PRIVATE src/m68681_emulator.c)
+    target_compile_definitions(umac_core PUBLIC UMAC_DEVELOPMENT_DUART)
+endif()
 
 target_include_directories(umac_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -115,7 +120,11 @@ if(BUILD_TESTING)
     target_include_directories(umac_m68681_test PRIVATE src)
     target_compile_options(umac_m68681_test PRIVATE -Wall -Wextra -pedantic)
     target_link_libraries(umac_m68681_test PRIVATE umac_core)
-    add_test(NAME m68681_debug_uart COMMAND umac_m68681_test)
+    if(UMAC_DEVELOPMENT_DUART)
+        add_test(NAME m68681_debug_uart COMMAND umac_m68681_test)
+    else()
+        add_test(NAME m68681_production_map COMMAND umac_m68681_test)
+    endif()
 
     add_test(NAME rtc_pram_safety
         COMMAND ${CMAKE_COMMAND}
@@ -125,8 +134,16 @@ if(BUILD_TESTING)
 
     set(UMAC_TEST_PLUS_ROM "" CACHE FILEPATH "User-supplied Mac Plus V3 ROM for integration tests")
     set(UMAC_TEST_PLUS_FLOPPY "" CACHE FILEPATH "User-supplied bootable raw or DiskCopy 4.2 800K System Tools floppy")
+    set(UMAC_TEST_VASM "" CACHE FILEPATH "vasmm68k_std for assembling the MC68681 boot disk probe")
     if(UMAC_TEST_PLUS_ROM)
         add_test(NAME scsi_plus_rom COMMAND umac_scsi_test rom "${UMAC_TEST_PLUS_ROM}")
+        if(UMAC_DEVELOPMENT_DUART AND UMAC_TEST_VASM)
+            find_package(Python3 REQUIRED COMPONENTS Interpreter)
+            add_test(NAME m68681_plus_rom_disk
+                     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_m68681_disk.py"
+                             $<TARGET_FILE:umac> "${UMAC_TEST_PLUS_ROM}" "${UMAC_TEST_VASM}")
+            set_tests_properties(m68681_plus_rom_disk PROPERTIES TIMEOUT 25)
+        endif()
         if(UMAC_TEST_PLUS_FLOPPY)
             add_executable(umac_iwm_rom_test tests/test_iwm_rom.c)
             target_compile_options(umac_iwm_rom_test PRIVATE -Wall -Wextra -pedantic)

@@ -37,8 +37,10 @@ void    umac_reset(void);
 uint64_t umac_ticks(void);
 void    umac_opt_disassemble(int enable);
 void    umac_iwm_trace(FILE *stream);
-/* Attach the caller-owned UART-B sink and reset the device. NULL disables it. */
+#ifdef UMAC_DEVELOPMENT_DUART
+/* Attach a caller-owned UART-B sink. NULL detaches the sink. */
 void    umac_debug_uart(FILE *stream);
+#endif
 void    umac_mouse(int deltax, int deltay, int button);
 void    umac_kbd_event(uint8_t scancode, int down);
 

@@ -44,7 +44,9 @@
 
 #include "machw.h"
 #include "m68k.h"
+#ifdef UMAC_DEVELOPMENT_DUART
 #include "m68681_emulator.h"
+#endif
 #include "via.h"
 #include "scc.h"
 #include "iwm.h"
@@ -84,7 +86,6 @@ static int disassemble = 0;
 
 static struct iwm iwm;
 static FILE *iwm_trace_stream;
-static FILE *debug_uart_stream;
 static unsigned int last_trace_sense;
 static uint64_t machine_ticks, bus_ticks, via_bus_ticks;
 static uint64_t via_irq_at = UINT64_MAX;
@@ -458,23 +459,25 @@ static void write_iwm(unsigned int address, uint8_t data)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Standalone ROM debug UART
+// Development DUART
+
+#ifdef UMAC_DEVELOPMENT_DUART
+static FILE *debug_uart_stream;
 
 void    umac_debug_uart(FILE *stream)
 {
-        m68681_emulator_reset();
         debug_uart_stream = stream;
 }
 
 static void drain_debug_uart(void)
 {
-        if (!debug_uart_stream)
-                return;
-
         m68681_channel_t *uart_b = m68681_emulator_get_channel(M68681_EMULATOR_CHANNEL_B);
         if (m68681_emulator_tx_pending(uart_b)) {
-                fputc(m68681_emulator_get_tx_byte(uart_b), debug_uart_stream);
-                fflush(debug_uart_stream);
+                uint8_t byte = m68681_emulator_get_tx_byte(uart_b);
+                if (debug_uart_stream) {
+                        fputc(byte, debug_uart_stream);
+                        fflush(debug_uart_stream);
+                }
         }
 
         /* An unconnected transmitter still completes its transfer. */
@@ -482,6 +485,7 @@ static void drain_debug_uart(void)
         if (m68681_emulator_tx_pending(uart_a))
                 (void)m68681_emulator_get_tx_byte(uart_a);
 }
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -566,8 +570,10 @@ unsigned int    FAST_FUNC(cpu_read_byte)(unsigned int address)
                                           : ncr5380_read_register(SCSI_REG(address));
         }
         bus_access(1, BUS_OTHER);
-        if (debug_uart_stream && IS_M68681(address))
+#ifdef UMAC_DEVELOPMENT_DUART
+        if (IS_M68681(address))
                 return m68681_emulator_read(ADR24(address) - M68681_BASE);
+#endif
         if (IS_DUMMY(address))
                 return 0;
 
@@ -592,8 +598,10 @@ unsigned int    FAST_FUNC(cpu_read_word)(unsigned int address)
         if (IS_SCSI(address))
                 return (address & 1) ? 0 : cpu_read_byte(address) << 8;
         bus_access(1, BUS_OTHER);
-        if (debug_uart_stream && IS_M68681(address))
+#ifdef UMAC_DEVELOPMENT_DUART
+        if (IS_M68681(address))
                 return 0xffff;
+#endif
         if (IS_TESTSW(address))
                 return 0;
 
@@ -623,8 +631,10 @@ unsigned int    FAST_FUNC(cpu_read_long)(unsigned int address)
                 return (high << 16) | cpu_read_word(address + 2);
         }
         bus_access(2, BUS_OTHER);
-        if (debug_uart_stream && IS_M68681(address))
+#ifdef UMAC_DEVELOPMENT_DUART
+        if (IS_M68681(address))
                 return 0xffffffff;
+#endif
         if (IS_TESTSW(address))
                 return 0;
 
@@ -696,13 +706,15 @@ void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
                 return;
         }
         bus_access(1, BUS_OTHER);
-        if (debug_uart_stream && IS_M68681(address)) {
+#ifdef UMAC_DEVELOPMENT_DUART
+        if (IS_M68681(address)) {
                 /* Yield after accepting a byte so TxRDY can recover promptly. */
                 if (m68681_emulator_write(ADR24(address) - M68681_BASE, value) &&
                     cpu_running && m68k_cycles_remaining() > 0)
                         m68k_end_timeslice();
                 return;
         }
+#endif
         if (IS_DUMMY(address))
                 return;
         printf("Ignoring write %02x to address %08x\n", value&0xff, address);
@@ -725,8 +737,10 @@ void    FAST_FUNC(cpu_write_word)(unsigned int address, unsigned int value)
                 return;
         }
         bus_access(1, BUS_OTHER);
-        if (debug_uart_stream && IS_M68681(address))
+#ifdef UMAC_DEVELOPMENT_DUART
+        if (IS_M68681(address))
                 return;
+#endif
         printf("Ignoring write %04x to address %08x\n", value&0xffff, address);
 }
 
@@ -745,8 +759,10 @@ void    FAST_FUNC(cpu_write_long)(unsigned int address, unsigned int value)
                 return;
         }
         bus_access(2, BUS_OTHER);
-        if (debug_uart_stream && IS_M68681(address))
+#ifdef UMAC_DEVELOPMENT_DUART
+        if (IS_M68681(address))
                 return;
+#endif
         printf("Ignoring write %08x to address %08x\n", value, address);
 }
 
@@ -764,7 +780,9 @@ static void     update_overlay_layout(void)
 void    cpu_pulse_reset(void)
 {
         ncr5380_reset();
+#ifdef UMAC_DEVELOPMENT_DUART
         m68681_emulator_reset();
+#endif
         uint64_t ticks = cpu_running ? bus_ticks : machine_ticks;
         bool sel = iwm.sel;
         iwm_reset(&iwm, ticks);
@@ -872,7 +890,10 @@ int     umac_init(void *ram_base, const void *rom_base, struct disk_img *interna
         overlay = 1;
         update_overlay_layout();
         iwm_init(&iwm, internal_floppy, machine_ticks);
+#ifdef UMAC_DEVELOPMENT_DUART
+        m68681_emulator_reset();
         umac_debug_uart(NULL);
+#endif
 
         ncr5380_reset();
 	m68k_init();
@@ -1021,7 +1042,9 @@ int     umac_loop(void)
                         machine_ticks = bus_ticks;
                 via_advance(machine_ticks);
                 via_irq_at = via_next_timer_irq();
+#ifdef UMAC_DEVELOPMENT_DUART
                 drain_debug_uart();
+#endif
         } while (machine_ticks < end);
 
         iwm_advance(&iwm, machine_ticks);

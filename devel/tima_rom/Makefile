@@ -35,7 +35,7 @@ $(BUILD)/tima-boot.rom: $(BUILD)/tima-boot.raw rom_test.py
 	$(PYTHON) rom_test.py pack "$<" "$@"
 
 umac:
-	cmake -S ../umac -B "$(BUILD)/umac" -DMEMSIZE=4096 -DBUILD_TESTING=OFF
+	cmake -S ../umac -B "$(BUILD)/umac" -DMEMSIZE=4096 -DBUILD_TESTING=OFF -DUMAC_DEVELOPMENT_DUART=ON
 	cmake --build "$(BUILD)/umac" --target umac --parallel 2
 
 test: all umac

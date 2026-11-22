@@ -2,8 +2,10 @@
 #include <stdlib.h>
 
 #include "cpu_cb.h"
-#include "m68681_emulator.h"
 #include "umac.h"
+#ifdef UMAC_DEVELOPMENT_DUART
+#include "m68681_emulator.h"
+#endif
 
 #define CHECK(expr) do {                                                        \
         if (!(expr)) {                                                          \
@@ -23,29 +25,32 @@
 #define IVR   0xc00019u
 #define TX_READY 0x04u
 
-/* Reset to a STOP instruction so the real uMac loop can service the DUART. */
 static const uint8_t rom[ROM_SIZE] = {
         0x00, 0x70, 0x10, 0x00, 0x00, 0x40, 0x00, 0x08,
+#ifndef UMAC_DEVELOPMENT_DUART
+        /* move.w 0xc00018,%d0 uses the normal unmapped word-read path. */
+        0x30, 0x39, 0x00, 0xc0, 0x00, 0x18,
+#endif
         0x4e, 0x72, 0x27, 0x00
 };
 static uint8_t ram[RAM_SIZE];
 
+#ifdef UMAC_DEVELOPMENT_DUART
 int main(void)
 {
         FILE *console = tmpfile();
         CHECK(console && umac_init(ram, rom, NULL) == 0);
-        CHECK(cpu_read_byte(IVR) == 0);
+        CHECK(cpu_read_byte(IVR) == 0x0f);
+        cpu_write_byte(IVR, 0x70);
         umac_debug_uart(console);
+        CHECK(m68681_emulator_interrupt_vector() == 0x70);
 
         CHECK(cpu_read_byte(0xc00000u) == 0xff);
         CHECK(cpu_read_byte(0xc00001u) == 0);
         CHECK(cpu_read_byte(0xc0001fu) == 0);
         CHECK(cpu_read_byte(0xc00020u) == 0);
-        CHECK(cpu_read_byte(IVR) == 0x0f);
         cpu_write_byte(IVR + 0x20, 0x55);
-        CHECK(cpu_read_byte(IVR) == 0x0f);
-        cpu_write_byte(IVR, 0x70);
-        CHECK(m68681_emulator_interrupt_vector() == 0x70);
+        CHECK(cpu_read_byte(IVR) == 0x70);
 
         cpu_write_byte(MR_B, 0x13);
         cpu_write_byte(MR_B, 0x07);
@@ -87,13 +92,34 @@ int main(void)
         umac_reset();
         CHECK(cpu_read_byte(IVR) == 0x0f && cpu_read_byte(SR_B) == 0);
         CHECK(umac_loop() == 0);
+
+        cpu_write_byte(IVR, 0x71);
+        cpu_write_byte(CR_B, 4);
+        umac_debug_uart(NULL);
+        CHECK(cpu_read_byte(IVR) == 0x71);
+        cpu_write_byte(DATA_B, 'D');
+        CHECK(!(cpu_read_byte(SR_B) & TX_READY));
+        CHECK(umac_loop() == 0);
+        CHECK(cpu_read_byte(SR_B) & TX_READY);
+
         rewind(console);
         CHECK(fgetc(console) == 0 && fgetc(console) == 0xfe);
         CHECK(fgetc(console) == EOF && feof(console));
-
-        umac_debug_uart(NULL);
-        CHECK(cpu_read_byte(IVR) == 0);
         CHECK(fclose(console) == 0);
-        puts("MC68681 window, byte lanes, RX, UART-B output and reset passed");
+        puts("MC68681 window, byte lanes, RX, UART-B sink and reset passed");
         return EXIT_SUCCESS;
 }
+#else
+int main(void)
+{
+        CHECK(umac_init(ram, rom, NULL) == 0);
+        cpu_write_byte(IVR, 0x70);
+        cpu_write_byte(CR_B, 4);
+        cpu_write_byte(DATA_B, 'B');
+        for (unsigned int address = 0xc00000; address < 0xc00020; ++address)
+                CHECK(cpu_read_byte(address) == 0);
+        CHECK(umac_loop() == 1);
+        puts("Production map leaves all 32 DUART bytes unmapped");
+        return EXIT_SUCCESS;
+}
+#endif

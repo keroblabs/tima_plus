@@ -118,39 +118,34 @@ see the current state.  For example, you can capture screenshots from
 screen memory (see `tools/mem2scr.c`).
 
 For standalone firmware tests, use `--raw-rom -r /path/to/test.rom`.
-This option accepts a regular 128 KiB raw MC68000 reset image; it is
-**not** supposed to be the eventual debug-device enable switch.
+This option accepts a regular 128 KiB raw MC68000 reset image and skips
+the Plus V3 checksum. The build configuration selects the hardware map.
 Run from a separate working directory because uMac truncates `ram.bin`
 on launch. See [Tima ROM](../tima_rom/) for a standalone ROM experiment.
 
 ### Development-only MC68681 debug peripheral
 
-The MC68681 DUART at `0xC00000–0xC0001F` is **an artificial uMac
-development peripheral, not part of the physical Macintosh Plus
-M0001AP**. It implements sixteen 8-bit registers in the MC68000's
-lower byte lane (odd addresses). Channel B transmit-ready is at
-`0xC00013` and transmit data at `0xC00017`.
+Development builds map the MC68681 at `0xC00000–0xC0001F`. Its sixteen
+8-bit registers use the MC68000's lower byte lane (odd addresses).
+UART-B transmit-ready is at `0xC00013` and transmit data is at
+`0xC00017`. The SDL frontend forwards UART-B bytes to stdout with either
+an alternate reset ROM or the original Plus V3 ROM and an 800K floppy.
+Embedders can attach a stream with `umac_debug_uart()` after `umac_init()`.
 
-**Current behaviour (review pending):** This branch enables the MC68681
-and forwards Channel B to stdout **only in `--raw-rom` sessions**. The
-UART-B regression test and the Tima ROM smoke test cover that path.
+The build option `UMAC_DEVELOPMENT_DUART` defaults to CMake `ON` and
+Make `1`. For the production M0001AP map, configure CMake with
+`-DUMAC_DEVELOPMENT_DUART=OFF` or run `make UMAC_DEVELOPMENT_DUART=0`.
+Both settings compile out the device and its address decode. Confine
+guest use of the debug console to development code or provide a fallback
+for physical firmware.
 
-**Required behaviour for development:** The MC68681 must be available
-when enabled in a **development emulator build**, regardless of whether
-the guest is the original Plus V3 ROM booting an 800K floppy or an
-alternate raw ROM. ROM choice and debug peripheral availability must
-be independent. This is the outstanding reviewer request on
-[PLUS-ROM-0002](../../docs/tasks/db/PLUS-ROM-0002.md); it is **not yet
-implemented or regression-tested**. Keeping UART-B stdout output is
-sufficient for now; a bidirectional socket interface is deferred.
-
-**Production/hardware compatibility:** The real M0001AP does **not**
-contain an MC68681 at this address. The final production configuration
-must **disable/compile out the development DUART** and preserve the
-standard Macintosh memory map. Guest debug-console use must be
-development-only or optional; the physical Tima/Plus build must never
-require access to this address. A build-time development-hardware
-switch should make this separation explicit and testable.
+To run the disk UART regression, configure the development build with
+`-DUMAC_TEST_PLUS_ROM=/path/to/rom.bin` and
+`-DUMAC_TEST_VASM=/path/to/vasmm68k_std`. The `m68681_plus_rom_disk`
+CTest assembles its own 800K boot floppy and checks the live UART-B
+output. The production build runs `m68681_production_map` to verify the
+unmapped window. See [PLUS-ROM-0002](../../docs/tasks/db/PLUS-ROM-0002.md)
+for the test evidence.
 
 For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
 

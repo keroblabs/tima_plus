@@ -27,6 +27,7 @@
 
 DEBUG ?= 0
 MEMSIZE ?= 4096
+UMAC_DEVELOPMENT_DUART ?= 1
 
 SOURCES = $(filter-out src/disc.c,$(wildcard src/*.c))
 
@@ -48,6 +49,17 @@ INCLUDEFLAGS += -DENABLE_DASM=1
 INCLUDEFLAGS += -DUMAC_MEMSIZE=$(MEMSIZE)
 CFLAGS = $(INCLUDEFLAGS) -Wall -Wextra -pedantic -DSIM
 
+ifeq ($(UMAC_DEVELOPMENT_DUART),1)
+	INCLUDEFLAGS += -DUMAC_DEVELOPMENT_DUART
+else ifeq ($(UMAC_DEVELOPMENT_DUART),0)
+	SOURCES := $(filter-out src/m68681_emulator.c,$(SOURCES))
+else
+$(error UMAC_DEVELOPMENT_DUART must be 0 or 1)
+endif
+
+DUART_CONFIG = build/development-duart-$(UMAC_DEVELOPMENT_DUART)
+DUART_CONFIGS = build/development-duart-0 build/development-duart-1
+
 ifeq ($(DEBUG),1)
 	CFLAGS += -Og -g -ggdb -DDEBUG
 endif
@@ -63,9 +75,16 @@ $(MUSASHI)/%ops.c $(MUSASHI)/%ops.h: $(MUSASHI)/%make $(MUSASHI)/%_in.c
 
 prepare:	$(MUSASHI)/m68kops.c $(MUSASHI)/m68kops.h
 
+# Changing the option rebuilds the objects that dispatch or attach the UART.
+$(DUART_CONFIG):
+	@mkdir -p $(@D)
+	@rm -f $(DUART_CONFIGS)
+	@touch $@
+
 $(OBJS): Makefile include/m68kconf.h
 $(MUSASHI_OBJS): $(MUSASHI)/m68kops.h
 src/main.o src/m68681_emulator.o: src/m68681_emulator.h
+src/main.o src/unix_main.o: $(DUART_CONFIG)
 
 $(MUSASHI_BUILD)/%.o: $(MUSASHI)/%.c
 	@mkdir -p $(@D)
@@ -79,7 +98,7 @@ main:	$(OBJS)
 	$(CC) $(LINKFLAGS) $^ $(LIBS) -o $@
 
 clean:
-	rm -f $(OBJS) main
+	rm -f $(OBJS) src/m68681_emulator.o $(DUART_CONFIGS) main
 
 ################################################################################
 # Mac driver sources (no need to generally rebuild
