@@ -2,7 +2,7 @@
 
 **ID:** `PLUS-EMU-0011`
 
-**Status:** `RESOLVED`
+**Status:** `CLOSED`
 
 **Title:** Insert and reinsert the assigned uMac floppy with F11
 
@@ -108,7 +108,7 @@ Reviewed the six-commit delta from `pre-release-umac` to `pre-release-umac-disk-
 | DONE | Exercise Finder eject and host replacement with the original ROM | Assignee (Codex) | See the build, test and trace evidence above |
 | DONE | Move deferred assignment to `-a` and verify the command-line and Finder behavior | Assignee (Codex) | `EMU11-R1` verified |
 | DONE | Review the implementation and accept the result | Reviewer (project owner) | Owner manually verified SCSI startup, F11 insert, Finder eject and F11 reinsert; approval 2026-11-22 |
-| PENDING | Merge approved work and perform integration housekeeping | Project owner | No merge has been performed as part of ticket approval |
+| DONE | Integrate approved disk-insert branch into `pre-release-umac` | Project owner | Both branches verified identical at `0144d31` on 2026-11-22; no separate merge commit |
 
 **Notes**
 
@@ -127,6 +127,8 @@ Reviewed the six-commit delta from `pre-release-umac` to `pre-release-umac-disk-
 - **2026-11-22 — TECHNICAL REVIEW (ChatGPT) — Approved pending owner:** Reviewed the F11 handler, deferred `-a` path handling, media image attach/eject lifecycle, checkpoint and lock release, IWM latch rearming, and recorded original-ROM SCSI/Finder regression evidence. No blocking code or design concerns identified. Developer test suites were not independently rerun here. Ticket remains `REVIEW` for final project-owner acceptance.
 
 - **2026-11-22 — REVIEWER (Project owner) — Final approval and status change:** The owner explicitly accepted the feature after their manual test: boot using SCSI, F11 to insert the `-a` floppy, eject through Finder, and F11 to reinsert. Approved correction commit `423822c` and the overall outcome, changing `REVIEW` → `RESOLVED`. Merge remains owner-controlled and is not yet recorded; ticket is not `CLOSED`.
+
+- **2026-11-22 — REVIEWER (Project owner) — Integration and closure:** The owner merged `pre-release-umac-disk-insert` into the designated working branch `pre-release-umac`. GitHub comparison showed **identical branch heads**, both at `0144d31c0eca0a41dcd78fa725e07b26ebbbb1fb`, with zero commits ahead or behind; no additional merge commit is present. The previously approved F11 disk-insertion implementation is integrated. Changed ticket `RESOLVED` → `CLOSED` on `pre-release-umac`. This does not change PLUS-EMU-0010, whose owner-format verification remains pending.
 
 **Proposed Change**
 
@@ -155,5 +157,5 @@ Acceptance criteria and required evidence
 - **Implementation and tests:** `devel/umac/src/unix_main.c`, `disk_img.c`, `iwm.c`, supporting headers, CLI/README and IWM regression fixtures. Implementation [`c7e9117`](https://github.com/keroblabs/tima_plus/commit/c7e911787f5fe33e641886a7c47f0404b00ff16f) required rework after its ambiguous `-i` handling; corrected and accepted in [`423822c`](https://github.com/keroblabs/tima_plus/commit/423822c5872533aff5fb566fa51fe5c43470d603). Independent review recorded in `fce5cc2`.
 - **Verification:** Developer-recorded CTest suites: **19/19** (4 MiB tagged DiskCopy), **18/18** (1 MiB raw 800K), and **13/13** (development UART disabled), with original Plus V3 ROM, Finder/SCSI boot, eject and reinsert behavior, malformed media retries, write locks, alias protection and existing IWM write/format. The project owner **personally confirmed** that the system boots from SCSI with `-a <image>`, F11 inserts the floppy, Finder ejects it and F11 successfully reinserts it. The independent reviewer inspected code and tests but did not reproduce the developer's local suite.
 - **Scope boundary:** One fixed host pathname is intentional; replacing the image is supported only after successful eject. Optional sanitizers were **not tested** because their host runtime libraries were unavailable. Neither constitutes a blocker to this approved ticket.
-- **Integration:** The implementation remains on `pre-release-umac-disk-insert`; **no merge has been made by this acceptance action**. Per project methodology, move to `CLOSED` after the project owner completes merge/integration and records the merge reference.
+- **Integration and closure (2026-11-22):** The owner reports merging `pre-release-umac-disk-insert` into `pre-release-umac`. Verified branch comparison: **identical** at [`0144d31`](https://github.com/keroblabs/tima_plus/commit/0144d31c0eca0a41dcd78fa725e07b26ebbbb1fb); no separate merge commit. Integration of the approved changes is complete on the designated working branch, so this ticket is now **CLOSED**. `PLUS-EMU-0010` remains separately in **REVIEW** pending owner-operated disk formatting.
 
