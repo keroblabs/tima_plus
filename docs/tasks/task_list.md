@@ -1,6 +1,6 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** SCSI, RTC and read-only IWM are closed. PLUS-EMU-0010 is in review as of 20 November 2026.
+**Status:** SCSI, RTC and read-only IWM are closed. PLUS-EMU-0010 is in review. PLUS-ROM-0002 was opened on 22 November 2026.
 
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
@@ -8,7 +8,7 @@
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current totals:** 6 registered / 0 OPEN / 0 IN_PROGRESS / 2 REVIEW / 0 RESOLVED / 4 CLOSED / 0 DEFERRED.
+**Current totals:** 7 registered / 1 OPEN / 0 IN_PROGRESS / 2 REVIEW / 0 RESOLVED / 4 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -29,6 +29,7 @@ No tickets formally opened under this category.
 | ID | Kind | Status | Title | Milestone | Ticket |
 | --- | --- | --- | --- | --- | --- |
 | [`PLUS-ROM-0001`](db/PLUS-ROM-0001.md) | `TASK` | `REVIEW` | Boot a standalone test ROM and record its RAM marker | [PLUS-DEV-0002 hardware profile](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-ROM-0001.md) |
+| [`PLUS-ROM-0002`](db/PLUS-ROM-0002.md) | `TASK` | `OPEN` | Print standalone ROM diagnostics over MC68681 UART-B | [PLUS-DEV-0002 hardware profile](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-ROM-0002.md) |
 
 ## PLUS-SYS — Tima/Plus boot, storage, OS and desktop
 
