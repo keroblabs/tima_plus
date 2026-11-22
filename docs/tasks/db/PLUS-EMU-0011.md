@@ -82,6 +82,23 @@ On the first `-a` cycle, ROM PC `$418606` read Sony sense register 1 as `$BF` at
 
 To repeat the desktop check, start uMac in a private working directory with an original Plus ROM and bootable SCSI image. Pass `-a floppy-disk.image -w --trace-iwm` and use disposable floppy copies. Wait for SCSI Finder, copy a floppy image to the assigned name and press F11. Select its icon and press Command-E. Write a differently named Macintosh volume to the same host path and press F11 again. Confirm Finder shows the new volume and the trace shows `/CSTIN` changing between `$BF` and `$3F`. The test used an offscreen SDL window. Physical key delivery through the owner's Wayland session is pending owner review.
 
+### Independent technical review — 22 November 2026
+
+**Result: TECHNICAL_REVIEW_APPROVED, pending final project-owner acceptance. No additional implementation changes requested. Ticket remains `REVIEW`.**
+
+Reviewed the six-commit delta from `pre-release-umac` to `pre-release-umac-disk-insert`, including `devel/umac/src/unix_main.c`, `disk_img.c`, `iwm.c`, new/reworked IWM tests and the current `-a` CLI correction.
+
+- **Startup versus assignment:** `-d <path>` still inserts at process startup; `-a <path>` assigns the path while creating an empty installed drive. `-w` works with either. Existing bare `-i` retains instruction tracing, eliminating the ambiguous original `-i <path>` interpretation. The `-a` option requires its argument.
+- **Safe host input handling:** The SDL frontend intercepts **F11** key-down (ignores repeats and key-up, does not forward it to the guest), does nothing if a medium is already present or no image was assigned, and revalidates aliases and the image before each insertion. The existing SCSI image's open file descriptor is checked against the new floppy image. Missing/invalid media remains retryable.
+- **Correct drive/media separation:** The IWM retains its existing drive object and mechanical state. `disk_img_insert()` loads and validates fresh image bytes into an empty drive. Successful Sony EJECT aborts an active write, requires a successful checkpoint, releases the image and writable sidecar lock, clears cached tracks, sets media absent and stops the spindle; the IWM read latch is rearmed after media removal. A checkpoint failure retains mounted media for retry.
+- **Regression evidence:** Developer records report **19/19** tagged 4 MiB, **18/18** raw 1 MiB and **13/13** production-map CTests passing. The host-side SDL test ran the **unmodified Plus V3 ROM**, booted Finder from **SCSI**, then inserted, Finder-ejected and reinserted 800K images after both in-place file overwrite and same-path rename. The user separately reports successfully exercising F11 and Finder eject/reinsert interactively. The CLI, write-lock, raw/DiskCopy, read-only, missing-image and keyboard-repeat guards have test coverage.
+
+**Non-blocking observations:** This interface intentionally has **one assigned pathname**, not an OS file picker or arbitrary new path entry; that is consistent with the owner's requested development workflow. Replacing media at that path is supported **after successful Finder eject**, not while mounted. The device is an emulator feature and does not alter physical M0001AP hardware. No further UI or media-management feature should be added to this ticket merely for completeness.
+
+**Evidence limitation:** This review inspected committed code, test logic and developer-recorded results, but did **not** rerun the compiler/emulator test suites or access their temporary host logs. It relies on the recorded test evidence and the owner's explicit live-session confirmation. The earlier review finding `EMU11-R1` is satisfactorily corrected.
+
+**Disposition:** Technically ready for final owner approval and owner-controlled merge; retain `REVIEW` until the project owner confirms acceptance. Do not automatically close or merge.
+
 **Current Work**
 
 | State | Work / acceptance evidence | Responsible | Next action / reference |
@@ -106,6 +123,7 @@ To repeat the desktop check, start uMac in a private working directory with an o
 - **2026-11-22 — ASSIGNEE (Codex) — Rework:** Gave `-a` a required path argument, restored trace-only parsing for `-i`, and updated CLI help, README and regression coverage. Updated the working VS Code launch to `-a devel/umac/floppy-disk.image` with its existing `-w`. The launch edit remains local to the working copy. The proposed change and reproduction instructions now use `-a`.
 - **2026-11-22 — ASSIGNEE (Codex) — Verification and status change:** Confirmed separate parsing and debug traces, reran the 19/19 tagged, 18/18 raw and 13/13 production-map CTest suites, and repeated Finder eject and both same-path replacement methods with `-a`. Marked `EMU11-R1` `VERIFIED` and returned `IN_PROGRESS` → `REVIEW` for owner acceptance.
 - **2026-11-22 — ASSIGNEE (Codex) — Local commit and handoff:** The review direction was recorded in `e286978`. The correction, tests and evidence are in `423822c5872533aff5fb566fa51fe5c43470d603` on `pre-release-umac-disk-insert`, ready for project-owner review.
+- **2026-11-22 — TECHNICAL REVIEW (ChatGPT) — Approved pending owner:** Reviewed the F11 handler, deferred `-a` path handling, media image attach/eject lifecycle, checkpoint and lock release, IWM latch rearming, and recorded original-ROM SCSI/Finder regression evidence. No blocking code or design concerns identified. Developer test suites were not independently rerun here. Ticket remains `REVIEW` for final project-owner acceptance.
 
 **Proposed Change**
 
@@ -124,7 +142,7 @@ Acceptance criteria and required evidence
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `pre-release-umac-disk-insert` | `c7e9117` | `CHANGES_REQUESTED` | Add F11 insertion from the configured path, release media on successful Sony eject, and retain regression evidence. `EMU11-R1` requires a dedicated assignment option. |
-| `pre-release-umac-disk-insert` | `423822c` | `UNREVIEWED` | Address `EMU11-R1` with `-a <floppy path>`, trace-only `-i`, and CLI and Finder regression evidence. |
+| `pre-release-umac-disk-insert` | `423822c` | `TECHNICAL_REVIEW_APPROVED` | Address `EMU11-R1` with `-a <floppy path>`, trace-only `-i`, and CLI and Finder regression evidence; pending final owner acceptance. |
 
 **Resolution Description**
 
