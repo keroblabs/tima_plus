@@ -2,7 +2,7 @@
 
 **ID:** `PLUS-ROM-0002`
 
-**Status:** `REVIEW`
+**Status:** `IN_PROGRESS`
 
 **Title:** Print standalone ROM diagnostics over MC68681 UART-B
 
@@ -80,6 +80,12 @@ Documentation updated directly by the reviewer in
 (commit `c4eb7aa`). Both document **current behaviour versus requested
 behaviour**, without implying the emulator change has already landed.
 
+### Review Findings
+
+| Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
+| --- | --- | --- | --- | --- |
+| R1 | `CORRECTION_REQUIRED` | `9915021` ties DUART decode to the stdout sink and opens that sink only for `--raw-rom`. | Select the development DUART at build time. Prove guest UART-B output in both ROM modes and the original address map in a disabled build. | IN PROGRESS |
+
 ### Verification
 
 The 131,072-byte ROM produced this UART-B output before uMac shutdown with SDL's dummy video driver. The test checked the same two lines after clean exit with status zero.
@@ -122,7 +128,7 @@ The local Plus V3 ROM and DiskCopy image matched their starting SHA-256 values a
 | DONE | Build and run the ROM with its own `printf` | Assignee (Codex) | Tima Boot smoke test and fixture evidence |
 | DONE | Run emulator and toolchain regression suites | Assignee (Codex) | Verification results above |
 | DONE | Record the implementation commit | Assignee (Codex) | `9915021` in the Commits table |
-| REWORK REQUESTED | Decouple MC68681 from `--raw-rom`; prove enable with both ROM types and disable in production configuration | Assignee (Codex) | Reviewer comment above; preserve existing UART-B tests |
+| PENDING | Decouple MC68681 from `--raw-rom` and verify the development and production configurations | Assignee (Codex) | R1 and a guest probe booted from an 800K floppy |
 | PENDING | Final review and approval once rework is evidenced | Reviewer (project owner) | Do not resolve or close until confirmed |
 
 **Notes**
@@ -137,6 +143,7 @@ The local Plus V3 ROM and DiskCopy image matched their starting SHA-256 values a
 - **2026-11-22 — ASSIGNEE (Codex) — Status Change:** Moved the ticket to `REVIEW` for the project owner. Verification covers the polled emulator console and the ROM build and boot path.
 - **2026-11-22 — ASSIGNEE (Codex) — Local Commit:** Recorded the implementation, tests and evidence as `9915021c246a7d6563d61c2f42fa3280f81dcd58` on `pre-release-rom-test`. The index and ticket match on status, title and kind. Project-owner review is pending.
 - **2026-11-22 — REVIEWER (Project owner) — Change requested:** MC68681 must be available for **any guest ROM** in a development emulator, not only `--raw-rom`; compile it out/disable it in final production configurations because original M0001AP hardware lacks it. No socket implementation is requested. The reviewer directly updated both affected READMEs (`6cdd763`, `c4eb7aa`). Ticket stays `REVIEW` until implementation, tests, and owner approval.
+- **2026-11-22 — ASSIGNEE (Codex) — Status Change:** Started R1 rework from review commit `0f14e2c` on `pre-release-rom-test`. Use one build-time setting in CMake and Make, with the DUART present by default in development and excluded in the production configuration. Verify actual guest MMIO with code booted by the original Plus V3 ROM from an 800K test floppy. Restore this ticket's row to the `PLUS-ROM` section and update its status to `IN_PROGRESS`.
 
 **Proposed Change**
 
@@ -148,7 +155,7 @@ Keep the ROM's reset, `.data` and `.bss` checks. Replace the RAM mailbox with se
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `pre-release-rom-test` | `9915021` | `UNREVIEWED` | Port MC68681, route UART-B to stdout, and verify standalone ROM output using the local vbcc tools. |
+| `pre-release-rom-test` | `9915021` | `CHANGES_REQUESTED` | Port MC68681, route UART-B to stdout, and verify standalone ROM output using the local vbcc tools. |
 
 **Resolution Description**
 
