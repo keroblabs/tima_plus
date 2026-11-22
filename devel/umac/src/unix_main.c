@@ -59,7 +59,7 @@ static void     print_help(char *n)
                "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
                "\t-i\t\t\tDisassembled instruction trace\n"
                "\t--trace-iwm\t\tTrace IWM and Sony drive events\n"
-               "\t--raw-rom\t\tBoot a 128 KiB raw reset ROM instead of a Plus V3 ROM\n", n);
+               "\t--raw-rom\t\tBoot a 128 KiB raw reset ROM with the UART-B debug console\n", n);
 }
 
 #define DISP_SCALE      2
@@ -586,6 +586,8 @@ int     main(int argc, char *argv[])
         // Emulator init
 
         umac_init(ram_base, rom_base, floppy);
+        if (raw_rom)
+                umac_debug_uart(stdout);
         umac_opt_disassemble(opt_disassemble);
         if (opt_iwm_trace)
                 umac_iwm_trace(stderr);

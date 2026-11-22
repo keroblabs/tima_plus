@@ -1,19 +1,26 @@
-extern volatile unsigned char __mailbox[];
+#include "rom_console.h"
 
-static const unsigned char marker[] = "ROM_TEST_PASS";
-volatile unsigned long boot_cookie = 0x13579bdfUL;
+#define BOOT_COOKIE 0x13579bdfUL
+
+volatile unsigned long boot_cookie = BOOT_COOKIE;
 volatile unsigned long boot_count;
 
-unsigned long tima_boot(void)
+void tima_boot(void)
 {
-    unsigned int i;
+    unsigned long cookie = boot_cookie;
+    unsigned long count = boot_count;
 
-    if (boot_cookie != 0x13579bdfUL || boot_count != 0)
-        return 1;
+    rom_console_init();
+    printf("Tima Boot: cookie=0x%lx bss=%lu\n", cookie, count);
+    if (cookie != BOOT_COOKIE || count != 0) {
+        printf("ROM_TEST_FAIL\n");
+        return;
+    }
+    printf("ROM_TEST_%s\n", "PASS");
+}
 
-    boot_cookie = 0;
-    boot_count = 1;
-    for (i = 0; i < sizeof marker; ++i)
-        __mailbox[i] = marker[i];
-    return 0;
+void tima_boot_trap(void)
+{
+    rom_console_init();
+    printf("\nROM_TEST_TRAP\n");
 }

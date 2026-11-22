@@ -1,4 +1,4 @@
-TOOLCHAIN ?= ../../../vbcc_pack/vport/build/host/bin
+TOOLCHAIN ?= /home/marcio/Projects/languages/vbcc_pack/vport/build/host/bin
 BUILD ?= build
 PYTHON ?= python3
 
@@ -7,7 +7,7 @@ AS68K = $(TOOLCHAIN)/vasmm68k_std
 VLINK = $(TOOLCHAIN)/vlink
 UMAC = $(BUILD)/umac/umac
 LINK = "$(VLINK)" -Bstatic -nostdlib -T m0001ap-rom.ld
-OBJS = $(BUILD)/crt0.o $(BUILD)/boot.o
+OBJS = $(BUILD)/crt0.o $(BUILD)/boot.o $(BUILD)/rom_console.o
 
 .PHONY: all test umac
 .DELETE_ON_ERROR:
@@ -16,10 +16,10 @@ all: $(BUILD)/tima-boot.rom $(BUILD)/tima-boot.elf
 $(BUILD):
 	mkdir -p "$@"
 
-$(BUILD)/boot.s: boot.c $(VBCC) | $(BUILD)
+$(BUILD)/boot.s $(BUILD)/rom_console.s: $(BUILD)/%.s: %.c rom_console.h $(VBCC) | $(BUILD)
 	"$(VBCC)" -quiet -cpu=68000 -gas -elf -rodata -o="$@" "$<"
 
-$(BUILD)/boot.o: $(BUILD)/boot.s $(AS68K)
+$(BUILD)/%.o: $(BUILD)/%.s $(AS68K)
 	"$(AS68K)" -quiet -gas -m68000 -elfregs -Felf -o "$@" "$<"
 
 $(BUILD)/crt0.o: crt0.s $(AS68K) | $(BUILD)

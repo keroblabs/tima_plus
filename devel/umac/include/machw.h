@@ -41,6 +41,7 @@
 #define MAC_SCREEN_WIDTH  512
 #define MAC_SCREEN_HEIGHT 342
 #define IWM_BASE        0xdfe1ffu
+#define M68681_BASE     0xc00000u
 
 ////////////////////////////////////////////////////////////////////////////////
 // RAM accessors
@@ -93,6 +94,7 @@ extern int overlay;
 #define IS_IWM(x)       ((ADR24(x) & 0xffe000) == (IWM_BASE & 0xffe000))
 #define IS_SCC_RD(x)    ((ADR24(x) & 0xf00000) == 0x900000)
 #define IS_SCC_WR(x)    ((ADR24(x) & 0xf00000) == 0xb00000)
+#define IS_M68681(x)    ((ADR24(x) & 0xffffe0) == M68681_BASE)
 #define IS_SCSI(x)      ((ADR24(x) & 0xf80000) == 0x580000)
 #define SCSI_DACK(x)    ((x) & 0x200)
 #define SCSI_REG(x)     (((x) >> 4) & 7)

@@ -14,7 +14,6 @@ reset:
         move.b  #0x10,0xefe7fe
         move.b  #0,0xeffffe
         movea.l #__stack_top,%sp
-        move.l  #0x52554e21,__mailbox
 
         lea     rom_vectors,%a0
         movea.l #0,%a1
@@ -43,14 +42,10 @@ reset:
 
 .Lcall:
         jsr     tima_boot
-        tst.l   %d0
-        bne.s   failed
 halt:
         stop    #0x2700
         bra.s   halt
-failed:
-        move.l  #0x4641494c,__mailbox
-        bra.s   halt
 fault:
-        move.l  #0x54524150,__mailbox
+        move.w  #0x2700,%sr
+        jsr     tima_boot_trap
         bra.s   halt

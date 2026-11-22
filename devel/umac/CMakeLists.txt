@@ -34,6 +34,7 @@ add_custom_command(
 add_library(umac_core STATIC
     src/disk_img.c
     src/iwm.c
+    src/m68681_emulator.c
     src/main.c
     src/rom.c
     src/rtc.c
@@ -109,6 +110,12 @@ if(BUILD_TESTING)
     target_compile_options(umac_via_rtc_test PRIVATE -Wall -Wextra -pedantic)
     target_link_libraries(umac_via_rtc_test PRIVATE umac_core)
     add_test(NAME via_rtc COMMAND umac_via_rtc_test)
+
+    add_executable(umac_m68681_test tests/test_m68681.c)
+    target_include_directories(umac_m68681_test PRIVATE src)
+    target_compile_options(umac_m68681_test PRIVATE -Wall -Wextra -pedantic)
+    target_link_libraries(umac_m68681_test PRIVATE umac_core)
+    add_test(NAME m68681_debug_uart COMMAND umac_m68681_test)
 
     add_test(NAME rtc_pram_safety
         COMMAND ${CMAKE_COMMAND}

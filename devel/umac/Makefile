@@ -65,6 +65,7 @@ prepare:	$(MUSASHI)/m68kops.c $(MUSASHI)/m68kops.h
 
 $(OBJS): Makefile include/m68kconf.h
 $(MUSASHI_OBJS): $(MUSASHI)/m68kops.h
+src/main.o src/m68681_emulator.o: src/m68681_emulator.h
 
 $(MUSASHI_BUILD)/%.o: $(MUSASHI)/%.c
 	@mkdir -p $(@D)

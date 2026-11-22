@@ -1,4 +1,4 @@
-"""Pack the Tima Boot ROM, or boot it in uMac and inspect uMac's RAM file."""
+"""Pack the Tima Boot ROM, or boot it in uMac and verify its UART-B output."""
 
 import argparse
 import os
@@ -10,9 +10,9 @@ import tempfile
 import time
 
 ROM_SIZE = 128 * 1024
-RAM_SIZE = 4 * 1024 * 1024
-MAILBOX = 0x400
-MARKER = b"ROM_TEST_PASS\0"
+MAX_LOG_SIZE = 64 * 1024
+BOOT_OUTPUT = b"Tima Boot: cookie=0x13579bdf bss=0\nROM_TEST_PASS\n"
+FAILURE_LINES = (b"ROM_TEST_FAIL\n", b"ROM_TEST_TRAP\n")
 
 
 def pack(raw_path, rom_path):
@@ -25,13 +25,9 @@ def pack(raw_path, rom_path):
     rom_path.write_bytes(raw.ljust(ROM_SIZE, b"\xff"))
 
 
-def read_marker(ram):
-    try:
-        with ram.open("rb") as f:
-            f.seek(MAILBOX)
-            return f.read(len(MARKER))
-    except FileNotFoundError:
-        return b""
+def read_console(log):
+    with log.open("rb") as capture:
+        return capture.read(MAX_LOG_SIZE)
 
 
 def run(emulator, rom):
@@ -55,8 +51,10 @@ def run(emulator, rom):
     short.write_bytes(rom.read_bytes()[:8])
     check_rejected(["--raw-rom", "-r", str(short)], b"expected a regular 128 KiB ROM file")
     short.unlink()
+    print("Plus V3 checksum and raw ROM size checks rejected invalid images")
 
-    saw_marker = False
+    expected = b"\n" + BOOT_OUTPUT
+    saw_output = False
     with log.open("wb") as output, subprocess.Popen(
         base + ["--raw-rom", "-r", str(rom)], cwd=work, env=env,
         stdout=output, stderr=subprocess.STDOUT,
@@ -64,11 +62,11 @@ def run(emulator, rom):
         deadline = time.monotonic() + 10
         try:
             while process.poll() is None and time.monotonic() < deadline:
-                observed = read_marker(ram)
-                if observed == MARKER:
-                    saw_marker = True
+                observed = read_console(log)
+                if expected in b"\n" + observed:
+                    saw_output = True
                     break
-                if observed[:4] in (b"FAIL", b"TRAP"):
+                if len(observed) == MAX_LOG_SIZE or any(line in observed for line in FAILURE_LINES):
                     break
                 time.sleep(0.01)
         finally:
@@ -79,12 +77,12 @@ def run(emulator, rom):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-    if not saw_marker or process.returncode != 0 or read_marker(ram) != MARKER:
-        raise SystemExit(f"ROM did not pass (uMac status {process.returncode}, "
-                         f"mailbox {read_marker(ram)!r}); see {log}")
-    if ram.stat().st_size != RAM_SIZE:
-        raise SystemExit(f"Unexpected RAM dump size: {ram.stat().st_size}")
-    print(f"ROM_TEST_PASS at file offset {MAILBOX:#010x} in {ram} (during and after uMac)")
+    observed = read_console(log)
+    if (not saw_output or process.returncode != 0 or len(observed) == MAX_LOG_SIZE or
+            (b"\n" + observed).count(expected) != 1 or any(line in observed for line in FAILURE_LINES)):
+        raise SystemExit(f"UART-B test failed (uMac status {process.returncode}); see {log}")
+    print(f"UART-B output verified during emulation and after clean exit in {log}")
+    print(BOOT_OUTPUT.decode("ascii"), end="")
 
 
 if __name__ == "__main__":

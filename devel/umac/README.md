@@ -118,11 +118,13 @@ see the current state.  For example, you can capture screenshots from
 screen memory (see `tools/mem2scr.c`).
 
 For standalone firmware tests, use `--raw-rom -r /path/to/test.rom`.
-This opt-in accepts a regular 128 KiB raw 68000 reset image without the
-Plus V3 checksum. It does not change the hardware map or the default
-Macintosh ROM checks. Use a separate working directory: uMac truncates
-`ram.bin` on each launch. See [Tima Boot](../tima_boot/) for a test image
-that writes a known marker into the file.
+This opt-in accepts a regular 128 KiB raw 68000 reset image and enables
+the MC68681 debug device at `0xC00000–0xC0001F`. Its sixteen registers use
+odd byte addresses. The guest polls transmit-ready at `0xC00013`, writes
+UART-B data to `0xC00017`, and uMac forwards the bytes to stdout. The
+standard Plus V3 boot mode uses the M0001AP hardware map. Run from a
+separate working directory because uMac truncates `ram.bin` on launch.
+See [Tima Boot](../tima_rom/) for a ROM that exercises this console.
 
 For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
 

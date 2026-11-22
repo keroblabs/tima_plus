@@ -24,5 +24,4 @@ SECTIONS {
 
   __stack_top = ORIGIN(STACK) + LENGTH(STACK);
   __reset_ssp = __stack_top + 0x00400000;
-  __mailbox = 0x00000400;
 }
