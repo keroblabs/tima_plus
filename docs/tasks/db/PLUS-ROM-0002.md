@@ -179,6 +179,7 @@ done
 - **2026-11-22 — ASSIGNEE (Codex) — Verification:** The same 800K disk fixture reached the UART register probe under the original Plus V3 ROM in both revisions. The review baseline produced the unmapped-byte diagnostic. The reworked emulator accepted the register accesses and printed `MAC_PLUS_DUART_PASS`. The alternate reset ROM printed `ROM_TEST_PASS`. Development passed all 19 CTests, production passed all 18, and the legacy Make switch passed. The production bus and symbol checks verified the compiled-out window. Captures and commands are in rework verification above.
 - **2026-11-22 — ASSIGNEE (Codex) — Status Change:** Marked R1 verified and returned the ticket to `REVIEW` with the owner as reviewer.
 - **2026-11-22 — ASSIGNEE (Codex) — Local Commit:** Recorded the rework, tests and verification as `5eb2d3a51dcf6d53df4fa3eed0be38afb13fa188` on `pre-release-rom-test`. Implementation review is pending.
+- **2026-11-22 — TECHNICAL REVIEW (ChatGPT) — Approved pending owner:** Read committed CMake/Make configuration, ROM-independent MMIO and UART-B host attachment, production-off boundary, and the original-ROM 800K boot-block probe. No blocking issues found; source and test design approved, developer's recorded 19/19 and 18/18 test runs not independently reproduced. Leave ticket in `REVIEW` for the project owner's acceptance.
 
 **Proposed Change**
 
@@ -193,7 +194,22 @@ Keep the ROM's reset, `.data` and `.bss` checks. Replace the RAM mailbox with se
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `pre-release-rom-test` | `9915021` | `CHANGES_REQUESTED` | Port MC68681, route UART-B to stdout, and verify standalone ROM output using the local vbcc tools. |
-| `pre-release-rom-test` | `5eb2d3a` | `UNREVIEWED` | Enable the development DUART with either ROM, compile it out for production, and verify both configurations. |
+| `pre-release-rom-test` | `5eb2d3a` | `TECHNICAL_REVIEW_APPROVED` | Enable the development DUART with either ROM, compile it out for production, and verify both configurations. Independent source/test review passed; awaiting final project-owner acceptance. |
+
+### Independent technical review — 22 November 2026
+
+**Reviewer finding: APPROVED for the requested R1 rework; final project-owner acceptance and merge remain pending. Ticket stays `REVIEW`.**
+
+Reviewed the rework on `pre-release-rom-test` against the four acceptance requirements in the earlier reviewer comment:
+
+1. **ROM-independent development access:** `src/main.c` gates the 32-byte decode and reset only on `UMAC_DEVELOPMENT_DUART`, not the UART sink or `--raw-rom`. `src/unix_main.c` attaches UART-B stdout in either ROM mode. Attaching/detaching the sink no longer resets the device.
+2. **Physical-hardware boundary:** `UMAC_DEVELOPMENT_DUART=OFF` (CMake) or `0` (Make) excludes `m68681_emulator.c`, relevant register dispatch and reset/drain hooks, plus the console API. Original unmapped-address handling remains in place. The DUART is **not** physical Macintosh Plus hardware; Tima/Plus production firmware must remain independent of it.
+3. **Disk-loaded firmware verification:** The new `tests/m68681_disk_probe.s` and `test_m68681_disk.py` create a synthetic 800K image containing an executable `LK`/`0x4418` boot block. The provided Plus V3 ROM enters its disk code, which verifies DUART access and transmits `MAC_PLUS_DUART_PASS`. The developer also recorded an expected failure of the identical probe on the previous reviewer baseline.
+4. **Regression/isolation coverage:** The model's odd-byte, wide-access, RX, reset and binary-output tests remain; the disabled configuration checks the unmapped window. Developer-provided records report **19/19 development and 18/18 production CTests passing**, including original-ROM System Tools boot and IWM read/write/format cases; the legacy Make option toggles `1 → 0 → 1` and linker/symbol checks were recorded.
+
+**Review limitations:** This was an independent inspection of the committed source and test harness. The developer's local logs, proprietary ROM/floppy fixtures and vbcc/vport installation were not rerun here; execution success above is **developer-recorded evidence**, not independently executed by this reviewer. No additional code changes are requested for `PLUS-ROM-0002`. Socket transport and interrupts remain separate, deferred work.
+
+**Disposition:** Ready for final project-owner review; do **not** mark `RESOLVED` or `CLOSED` until the owner approves under the established process.
 
 **Resolution Description**
 
