@@ -105,6 +105,7 @@ To repeat the desktop check, start uMac in a private working directory with an o
 - **2026-11-22 — ASSIGNEE (Codex) — Status change:** Moved `REVIEW` → `IN_PROGRESS` to implement `EMU11-R1`. The correction covers argument parsing, the CLI and launch examples, and regression verification.
 - **2026-11-22 — ASSIGNEE (Codex) — Rework:** Gave `-a` a required path argument, restored trace-only parsing for `-i`, and updated CLI help, README and regression coverage. Updated the working VS Code launch to `-a devel/umac/floppy-disk.image` with its existing `-w`. The launch edit remains local to the working copy. The proposed change and reproduction instructions now use `-a`.
 - **2026-11-22 — ASSIGNEE (Codex) — Verification and status change:** Confirmed separate parsing and debug traces, reran the 19/19 tagged, 18/18 raw and 13/13 production-map CTest suites, and repeated Finder eject and both same-path replacement methods with `-a`. Marked `EMU11-R1` `VERIFIED` and returned `IN_PROGRESS` → `REVIEW` for owner acceptance.
+- **2026-11-22 — ASSIGNEE (Codex) — Local commit and handoff:** The review direction was recorded in `e286978`. The correction, tests and evidence are in `423822c5872533aff5fb566fa51fe5c43470d603` on `pre-release-umac-disk-insert`, ready for project-owner review.
 
 **Proposed Change**
 
@@ -123,6 +124,7 @@ Acceptance criteria and required evidence
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `pre-release-umac-disk-insert` | `c7e9117` | `CHANGES_REQUESTED` | Add F11 insertion from the configured path, release media on successful Sony eject, and retain regression evidence. `EMU11-R1` requires a dedicated assignment option. |
+| `pre-release-umac-disk-insert` | `423822c` | `UNREVIEWED` | Address `EMU11-R1` with `-a <floppy path>`, trace-only `-i`, and CLI and Finder regression evidence. |
 
 **Resolution Description**
 
