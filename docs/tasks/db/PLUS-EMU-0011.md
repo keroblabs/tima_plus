@@ -2,7 +2,7 @@
 
 **ID:** `PLUS-EMU-0011`
 
-**Status:** `REVIEW`
+**Status:** `RESOLVED`
 
 **Title:** Insert and reinsert the assigned uMac floppy with F11
 
@@ -107,7 +107,8 @@ Reviewed the six-commit delta from `pre-release-umac` to `pre-release-umac-disk-
 | DONE | Implement assigned-path insertion and writable-media release | Assignee (Codex) | See the implementation commit and uMac README |
 | DONE | Exercise Finder eject and host replacement with the original ROM | Assignee (Codex) | See the build, test and trace evidence above |
 | DONE | Move deferred assignment to `-a` and verify the command-line and Finder behavior | Assignee (Codex) | `EMU11-R1` verified |
-| PENDING | Review the local implementation and accept the result | Reviewer (project owner) | Review the commit and exercise the Wayland launch |
+| DONE | Review the implementation and accept the result | Reviewer (project owner) | Owner manually verified SCSI startup, F11 insert, Finder eject and F11 reinsert; approval 2026-11-22 |
+| PENDING | Merge approved work and perform integration housekeeping | Project owner | No merge has been performed as part of ticket approval |
 
 **Notes**
 
@@ -124,6 +125,8 @@ Reviewed the six-commit delta from `pre-release-umac` to `pre-release-umac-disk-
 - **2026-11-22 — ASSIGNEE (Codex) — Verification and status change:** Confirmed separate parsing and debug traces, reran the 19/19 tagged, 18/18 raw and 13/13 production-map CTest suites, and repeated Finder eject and both same-path replacement methods with `-a`. Marked `EMU11-R1` `VERIFIED` and returned `IN_PROGRESS` → `REVIEW` for owner acceptance.
 - **2026-11-22 — ASSIGNEE (Codex) — Local commit and handoff:** The review direction was recorded in `e286978`. The correction, tests and evidence are in `423822c5872533aff5fb566fa51fe5c43470d603` on `pre-release-umac-disk-insert`, ready for project-owner review.
 - **2026-11-22 — TECHNICAL REVIEW (ChatGPT) — Approved pending owner:** Reviewed the F11 handler, deferred `-a` path handling, media image attach/eject lifecycle, checkpoint and lock release, IWM latch rearming, and recorded original-ROM SCSI/Finder regression evidence. No blocking code or design concerns identified. Developer test suites were not independently rerun here. Ticket remains `REVIEW` for final project-owner acceptance.
+
+- **2026-11-22 — REVIEWER (Project owner) — Final approval and status change:** The owner explicitly accepted the feature after their manual test: boot using SCSI, F11 to insert the `-a` floppy, eject through Finder, and F11 to reinsert. Approved correction commit `423822c` and the overall outcome, changing `REVIEW` → `RESOLVED`. Merge remains owner-controlled and is not yet recorded; ticket is not `CLOSED`.
 
 **Proposed Change**
 
@@ -142,8 +145,15 @@ Acceptance criteria and required evidence
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `pre-release-umac-disk-insert` | `c7e9117` | `CHANGES_REQUESTED` | Add F11 insertion from the configured path, release media on successful Sony eject, and retain regression evidence. `EMU11-R1` requires a dedicated assignment option. |
-| `pre-release-umac-disk-insert` | `423822c` | `TECHNICAL_REVIEW_APPROVED` | Address `EMU11-R1` with `-a <floppy path>`, trace-only `-i`, and CLI and Finder regression evidence; pending final owner acceptance. |
+| `pre-release-umac-disk-insert` | `423822c` | `APPROVED` | Correct `EMU11-R1` with `-a <floppy path>`, trace-only `-i`, and CLI and Finder regression evidence; accepted by project owner on 2026-11-22. |
 
 **Resolution Description**
 
-Pending.
+**Accepted and RESOLVED on 2026-11-22 by the project owner**, following independent technical review and the owner's successful interactive test.
+
+- **Disposition:** `PLUS-EMU-0011` is approved. `-d <image>` continues to insert a floppy at startup; `-a <image>` assigns a deferred insertion path without inserting media before boot; `-i` remains instruction tracing; `-w` allows persistent writes. F11 inserts the assigned image only into an empty drive. Finder eject checkpoints pending changes and, on success, releases media and its writable lock, allowing replacement at the same host path and subsequent F11 reinsertion.
+- **Implementation and tests:** `devel/umac/src/unix_main.c`, `disk_img.c`, `iwm.c`, supporting headers, CLI/README and IWM regression fixtures. Implementation [`c7e9117`](https://github.com/keroblabs/tima_plus/commit/c7e911787f5fe33e641886a7c47f0404b00ff16f) required rework after its ambiguous `-i` handling; corrected and accepted in [`423822c`](https://github.com/keroblabs/tima_plus/commit/423822c5872533aff5fb566fa51fe5c43470d603). Independent review recorded in `fce5cc2`.
+- **Verification:** Developer-recorded CTest suites: **19/19** (4 MiB tagged DiskCopy), **18/18** (1 MiB raw 800K), and **13/13** (development UART disabled), with original Plus V3 ROM, Finder/SCSI boot, eject and reinsert behavior, malformed media retries, write locks, alias protection and existing IWM write/format. The project owner **personally confirmed** that the system boots from SCSI with `-a <image>`, F11 inserts the floppy, Finder ejects it and F11 successfully reinserts it. The independent reviewer inspected code and tests but did not reproduce the developer's local suite.
+- **Scope boundary:** One fixed host pathname is intentional; replacing the image is supported only after successful eject. Optional sanitizers were **not tested** because their host runtime libraries were unavailable. Neither constitutes a blocker to this approved ticket.
+- **Integration:** The implementation remains on `pre-release-umac-disk-insert`; **no merge has been made by this acceptance action**. Per project methodology, move to `CLOSED` after the project owner completes merge/integration and records the merge reference.
+
