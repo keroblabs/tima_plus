@@ -1,6 +1,6 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** SCSI, RTC and read-only IWM are closed. Writable IWM and the standalone ROM tickets are in review as of 22 November 2026.
+**Status:** SCSI, RTC and read-only IWM are closed. Writable IWM and the standalone ROM tickets are in review as of 22 November 2026. PLUS-EMU-0010 is in review as of 20 November 2026.
 
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
@@ -29,6 +29,12 @@ No tickets formally opened under this category.
 | ID | Kind | Status | Title | Milestone | Ticket |
 | --- | --- | --- | --- | --- | --- |
 | [`PLUS-ROM-0001`](db/PLUS-ROM-0001.md) | `TASK` | `REVIEW` | Boot a standalone test ROM and record its RAM marker | [PLUS-DEV-0002 hardware profile](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-ROM-0001.md) |
+
+## CPLD-DOC — Documentation and engineering methodology
+
+| ID | Kind | Status | Title | Milestone | Ticket |
+| --- | --- | --- | --- | --- | --- |
+| `CPLD-DOC-0001` | IMPROVEMENT | RESOLVED | Add stakeholder attribution and current-work summary to tickets | Engineering workflow | [Details](db/CPLD-DOC-0001.md) |
 | [`PLUS-ROM-0002`](db/PLUS-ROM-0002.md) | `TASK` | `REVIEW` | Print standalone ROM diagnostics over MC68681 UART-B | [PLUS-DEV-0002 hardware profile](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-ROM-0002.md) |
 
 ## PLUS-SYS — Tima/Plus boot, storage, OS and desktop
