@@ -158,7 +158,7 @@ done
 | DONE | Run emulator and toolchain regression suites | Assignee (Codex) | Verification results above |
 | DONE | Record the implementation commit | Assignee (Codex) | `9915021` in the Commits table |
 | DONE | Decouple MC68681 from `--raw-rom` and verify the development and production configurations | Assignee (Codex) | R1 and rework verification above |
-| PENDING | Record the rework commit | Assignee (Codex) | Commits table |
+| DONE | Record the rework commit | Assignee (Codex) | `5eb2d3a` in the Commits table |
 | PENDING | Final review and approval once rework is evidenced | Reviewer (project owner) | Do not resolve or close until confirmed |
 
 **Notes**
@@ -178,6 +178,7 @@ done
 - **2026-11-22 — ASSIGNEE (Codex) — Test Harness Correction:** The first development CTest run rejected the probe at assembly time. Used the existing project's vasm register syntax option (`-elfregs`) and an explicit boot-header pad, then confirmed the assembled eight-byte header before rerunning. The first result is retained in `plus-rom-0002/rework/development-ctest-first.log` under the test build directory.
 - **2026-11-22 — ASSIGNEE (Codex) — Verification:** The same 800K disk fixture reached the UART register probe under the original Plus V3 ROM in both revisions. The review baseline produced the unmapped-byte diagnostic. The reworked emulator accepted the register accesses and printed `MAC_PLUS_DUART_PASS`. The alternate reset ROM printed `ROM_TEST_PASS`. Development passed all 19 CTests, production passed all 18, and the legacy Make switch passed. The production bus and symbol checks verified the compiled-out window. Captures and commands are in rework verification above.
 - **2026-11-22 — ASSIGNEE (Codex) — Status Change:** Marked R1 verified and returned the ticket to `REVIEW` with the owner as reviewer.
+- **2026-11-22 — ASSIGNEE (Codex) — Local Commit:** Recorded the rework, tests and verification as `5eb2d3a51dcf6d53df4fa3eed0be38afb13fa188` on `pre-release-rom-test`. Implementation review is pending.
 
 **Proposed Change**
 
@@ -192,6 +193,7 @@ Keep the ROM's reset, `.data` and `.bss` checks. Replace the RAM mailbox with se
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
 | `pre-release-rom-test` | `9915021` | `CHANGES_REQUESTED` | Port MC68681, route UART-B to stdout, and verify standalone ROM output using the local vbcc tools. |
+| `pre-release-rom-test` | `5eb2d3a` | `UNREVIEWED` | Enable the development DUART with either ROM, compile it out for production, and verify both configurations. |
 
 **Resolution Description**
 
