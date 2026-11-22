@@ -82,6 +82,7 @@ To repeat the desktop check, start uMac in a private working directory with an o
 - **2026-11-22 — ASSIGNEE (Codex) — Implementation:** Added deferred CLI assignment and SDL F11 handling. Reused format validation and writable locking for each load, and reused the checkpoint path for Finder eject. Cleared the old image, encoded tracks and IWM latch on completed eject. Added regression checks for replacement and startup path aliases. Updated the working VS Code floppy option to `-i`; the local launch configuration and media were kept outside the implementation commit.
 - **2026-11-22 — ASSIGNEE (Codex) — Rework and verification:** The first SDL run reported an incorrect error for a missing parent directory. Preserved the error from the failed path lookup and confirmed the frontend reports the missing path and can retry. The 4 MiB tagged, 1 MiB raw and production-map CTest runs passed 19/19, 18/18 and 13/13. Confirmed the Finder eject and replacement sequence using actual SDL input events and the unmodified ROM. Recorded logs, checksums and the optional sanitizer limitation above.
 - **2026-11-22 — ASSIGNEE (Codex) — Status change:** Moved `IN_PROGRESS` → `REVIEW` after verification. Owner review and acceptance are pending.
+- **2026-11-22 — ASSIGNEE (Codex) — Local commit and handoff:** Recorded the implementation, tests and verification as `c7e911787f5fe33e641886a7c47f0404b00ff16f` on the designated branch. The commit is ready for project-owner review.
 
 **Proposed Change**
 
@@ -98,6 +99,7 @@ Acceptance criteria and required evidence
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `pre-release-umac-disk-insert` | `c7e9117` | `UNREVIEWED` | Add F11 insertion from the configured path, release media on successful Sony eject, and retain regression evidence. |
 
 **Resolution Description**
 
