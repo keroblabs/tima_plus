@@ -147,8 +147,8 @@ output. The production build runs `m68681_production_map` to verify the
 unmapped window. See [PLUS-ROM-0002](../../docs/tasks/db/PLUS-ROM-0002.md)
 for the test evidence.
 
-For a `DEBUG` build, add `--trace-instructions` to get a disassembly trace
-of execution. The legacy `-i` without a path also enables tracing.
+For a `DEBUG` build, use `-i` or `--trace-instructions` to get a disassembly
+trace of execution.
 
 Use `-W loaded.rom` to dump the loaded ROM bytes for comparison with the
 input file. `--trace-iwm` reports ROM PCs, virtual ticks, drive-control signals,
@@ -156,12 +156,12 @@ IWM status, and write and checkpoint outcomes.
 
 ### Floppy insertion and writes
 
-Use `-d disk.image` to insert an image at startup, or `-i disk.image` to
+Use `-d disk.image` to insert an image at startup, or `-a disk.image` to
 assign its path and start with the drive empty. For example, boot from SCSI
 with a floppy ready to insert on demand:
 
 ```sh
-./build-cmake/umac -r rom.bin -s HD10_512.hda -i floppy-disk.image -w
+./build-cmake/umac -r rom.bin -s HD10_512.hda -a floppy-disk.image -w
 ```
 
 Press **F11** in the emulator window to insert the assigned image into an

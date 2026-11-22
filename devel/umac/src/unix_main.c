@@ -52,13 +52,13 @@ static void     print_help(char *n)
                "\t-r <rom path>\t\tDefault 'rom.bin'\n"
                "\t-W <rom dump path>\tDump the original ROM bytes\n"
                "\t-d <floppy path>\tInsert a Macintosh 800K image at startup (default R/O)\n"
-               "\t-i <floppy path>\tAssign an image and start empty (F11 inserts it)\n"
-               "\t-w\t\t\tEnable persistent floppy writes (requires -d or -i <path>)\n"
+               "\t-a <floppy path>\tAssign an image and start empty (F11 inserts it)\n"
+               "\t-w\t\t\tEnable persistent floppy writes (requires -d or -a <path>)\n"
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
                "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
-               "\t--trace-instructions\tDisassembled instruction trace (also bare -i)\n"
+               "\t--trace-instructions\tDisassembled instruction trace (also -i)\n"
                "\t--trace-iwm\t\tTrace IWM and Sony drive events\n"
                "\t--raw-rom\t\tBoot a 128 KiB raw reset ROM and skip the Plus V3 checksum\n", n);
 }
@@ -323,28 +323,21 @@ int     main(int argc, char *argv[])
                 {"raw-rom", no_argument, NULL, 'R'},
                 {0}
         };
-        while ((ch = getopt_long(argc, argv, "r:d:W:s:t:P:ihwp", long_options, NULL)) != -1) {
+        while ((ch = getopt_long(argc, argv, "r:d:a:W:s:t:P:ihwp", long_options, NULL)) != -1) {
                 switch (ch) {
                 case 'r':
                         rom_filename = optarg;
                         break;
 
                 case 'i':
-                        /* Accept a following path and retain the legacy
-                         * no-argument option, including grouped flags. */
-                        if (optind < argc && argv[optind][0] != '-') {
-                                disc_filename = argv[optind++];
-                                insert_at_startup = false;
-                                break;
-                        }
-                        /* fall through */
                 case 'T':
                         opt_disassemble = 1;
                         break;
 
                 case 'd':
+                case 'a':
                         disc_filename = optarg;
-                        insert_at_startup = true;
+                        insert_at_startup = ch == 'd';
                         break;
 
                 case 'w':
@@ -390,7 +383,7 @@ int     main(int argc, char *argv[])
                 }
         }
         if (floppy_write && !disc_filename) {
-                fprintf(stderr, "-w requires a floppy image (-d or -i <path>)\n");
+                fprintf(stderr, "-w requires a floppy image (-d or -a <path>)\n");
                 return 1;
         }
         if (!scsi_filename && (scsi_id != -1 || scsi_write)) {

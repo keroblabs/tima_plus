@@ -2,7 +2,7 @@
 
 **ID:** `PLUS-EMU-0011`
 
-**Status:** `IN_PROGRESS`
+**Status:** `REVIEW`
 
 **Title:** Insert and reinsert the assigned uMac floppy with F11
 
@@ -31,9 +31,9 @@ The two source observations above describe the inspected baseline. The implement
 
 | Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
 | --- | --- | --- | --- | --- |
-| `EMU11-R1` | `CORRECTION_REQUIRED` | `c7e9117` makes `-i` either a trace switch or a floppy assignment depending on the next token. | Give deferred floppy assignment its own required-argument option, `-a <floppy path>`. Verify bare `-i` traces, `-a` requires a path, and `-a <floppy path> -w` supports the Finder eject and F11 replacement cycle. | `OPEN` |
+| `EMU11-R1` | `CORRECTION_REQUIRED` | `c7e9117` makes `-i` either a trace switch or a floppy assignment depending on the next token. | Give deferred floppy assignment its own required-argument option, `-a <floppy path>`. Verify bare `-i` traces, `-a` requires a path, and `-a <floppy path> -w` supports the Finder eject and F11 replacement cycle. See the rework evidence below. | `VERIFIED` |
 
-### Verification
+### Initial verification (`c7e9117`)
 
 | Configuration or test | Result | Evidence |
 | --- | --- | --- |
@@ -69,7 +69,18 @@ The first mount and eject produced the following IWM observations. The later two
 
 Separate read-only controls used a valid data floppy already on disk at startup. `-i` left it empty until F11. `-d` inserted it immediately, the ROM ejected it while falling back to SCSI boot, and F11 mounted it again. Finder eject left both control images byte-identical and neither acquired a writable lock. An unassigned session handled F11 and F12 without transmitting either key to the guest. Full logs and screenshots from this run are under `/tmp/plus-emu-0011.4oNkDc/`; the screenshots and filtered guest trace are in `replacement-zbgkkbzb/`.
 
-To repeat the desktop check, start uMac in a private working directory with an original Plus ROM and bootable SCSI image. Pass `-i floppy-disk.image -w --trace-iwm` and use disposable floppy copies. Wait for SCSI Finder, copy a floppy image to the assigned name and press F11. Select its icon and press Command-E. Write a differently named Macintosh volume to that same host path and press F11 again. Confirm Finder shows the new volume and the trace shows `/CSTIN` changing between `$BF` and `$3F`. The test used an offscreen SDL window. Physical key delivery through the owner's Wayland session is pending owner review.
+### EMU11-R1 rework verification
+
+| Check | Result and evidence |
+| --- | --- |
+| CLI separation | PASS. The old `-i floppy-disk.image -w` reached ROM loading in an empty working directory. The updated `iwm_media_protection` test verifies that `-w -i <floppy path>` leaves the floppy unassigned, `-a` requires a path, and path protection applies to both `-a` and `-d`. That test also passed with `POSIXLY_CORRECT=1`. |
+| Trace switches | PASS. A standalone `make -j3 DEBUG=1` build emitted `E 400008: 60fe` with bare `-i`, `--trace-instructions`, and grouped `-iw -a pending.image`. The grouped run announced a deferred assignment and left the writable lock free. |
+| Regression suites | PASS. Tagged Release with the original Plus ROM and 4 MiB passed 19/19 CTests. Raw Release with the original Plus ROM and 1 MiB passed 18/18. Debug with the production map passed 13/13. |
+| Offscreen SDL with the original Plus ROM | PASS. With `-a media/floppy-disk.image -w`, SCSI Finder started with the drive empty. F11 mounted the raw `Swap Raw One` volume, the tagged `Swap Tagged2` volume after an in-place overwrite, and `Swap Tagged3` after a replacement by rename. Finder Command-E returned the drive to empty and released the writable lock after each mount. Read-only `-a` and `-d` startup controls and unassigned F11 also passed. |
+
+On the first `-a` cycle, ROM PC `$418606` read Sony sense register 1 as `$BF` at C8M tick 352,037,952 and `$3F` after F11 at tick 1,844,385,964. Finder's EJECT strobed command 6 at PC `$417FDA`, tick 4,683,198,608, with `media=0` and `save_error=0`. Sense returned `$BF` at tick 4,683,985,928. The working ROM, SCSI disk and both floppy images matched the SHA-256 hashes from initial verification. Rerun evidence is under `/tmp/plus-emu-0011-a.h0KDWZ/`, including `trace-cli.log`, `desktop-insert.log`, and the filtered IWM trace and screenshots in `replacement-l0u63kkf/`.
+
+To repeat the desktop check, start uMac in a private working directory with an original Plus ROM and bootable SCSI image. Pass `-a floppy-disk.image -w --trace-iwm` and use disposable floppy copies. Wait for SCSI Finder, copy a floppy image to the assigned name and press F11. Select its icon and press Command-E. Write a differently named Macintosh volume to the same host path and press F11 again. Confirm Finder shows the new volume and the trace shows `/CSTIN` changing between `$BF` and `$3F`. The test used an offscreen SDL window. Physical key delivery through the owner's Wayland session is pending owner review.
 
 **Current Work**
 
@@ -78,7 +89,7 @@ To repeat the desktop check, start uMac in a private working directory with an o
 | DONE | Register owner requirements and inspect startup, input and eject code | Reporter (Codex) | Opened on the designated branch |
 | DONE | Implement assigned-path insertion and writable-media release | Assignee (Codex) | See the implementation commit and uMac README |
 | DONE | Exercise Finder eject and host replacement with the original ROM | Assignee (Codex) | See the build, test and trace evidence above |
-| PENDING | Move deferred assignment to `-a` and verify the command-line and Finder behavior | Assignee (Codex) | Address `EMU11-R1` |
+| DONE | Move deferred assignment to `-a` and verify the command-line and Finder behavior | Assignee (Codex) | `EMU11-R1` verified |
 | PENDING | Review the local implementation and accept the result | Reviewer (project owner) | Review the commit and exercise the Wayland launch |
 
 **Notes**
@@ -92,14 +103,17 @@ To repeat the desktop check, start uMac in a private working directory with an o
 - **2026-11-22 — ASSIGNEE (Codex) — Local commit and handoff:** Recorded the implementation, tests and verification as `c7e911787f5fe33e641886a7c47f0404b00ff16f` on the designated branch. The commit is ready for project-owner review.
 - **2026-11-22 — REVIEWER (local) — Command:** The project owner, identified in the request as `REVEWER (local)`, directed replacing `-i <floppy path>` with `-a <floppy path>` to remove the conflict with bare `-i`. Recorded `EMU11-R1` and marked `c7e9117` `CHANGES_REQUESTED`.
 - **2026-11-22 — ASSIGNEE (Codex) — Status change:** Moved `REVIEW` → `IN_PROGRESS` to implement `EMU11-R1`. The correction covers argument parsing, the CLI and launch examples, and regression verification.
+- **2026-11-22 — ASSIGNEE (Codex) — Rework:** Gave `-a` a required path argument, restored trace-only parsing for `-i`, and updated CLI help, README and regression coverage. Updated the working VS Code launch to `-a devel/umac/floppy-disk.image` with its existing `-w`. The launch edit remains local to the working copy. The proposed change and reproduction instructions now use `-a`.
+- **2026-11-22 — ASSIGNEE (Codex) — Verification and status change:** Confirmed separate parsing and debug traces, reran the 19/19 tagged, 18/18 raw and 13/13 production-map CTest suites, and repeated Finder eject and both same-path replacement methods with `-a`. Marked `EMU11-R1` `VERIFIED` and returned `IN_PROGRESS` → `REVIEW` for owner acceptance.
 
 **Proposed Change**
 
-Keep the emulated internal drive installed and track its medium separately from the configured host path. Load and validate the file afresh on each F11 press with an empty drive. On successful guest eject, checkpoint and release image data, cached tracks and host lock resources. Update Sony senses when the medium is accepted or released. Preserve the existing instruction trace and floppy write options.
+Keep the emulated internal drive installed and track its medium separately from the configured host path. Use `-a <floppy path>` to assign the path with the drive empty and `-d <floppy path>` to insert at startup. Use `-i` for instruction tracing and `-w` to enable persistent writes with either floppy option. Load and validate the file afresh on each F11 press with an empty drive. On successful guest eject, checkpoint and release image data, cached tracks and host lock resources. Update Sony senses when the medium is accepted or released.
 
 Acceptance criteria and required evidence
 
-- [x] `-d` still inserts at startup. `-i` starts with the drive installed and empty, including when the image file is absent at launch.
+- [x] `-d` inserts at startup. `-a` starts with the drive installed and empty, including when the image file is absent at launch.
+- [x] `-a` requires a path. Bare `-i` enables instruction tracing.
 - [x] F11 inserts the assigned image through the original ROM's Sony drive interface. With a disk present or with no path assigned, F11 leaves the drive unchanged.
 - [x] Finder eject releases the image and its writable lock after a successful checkpoint. After in-place overwrite or replacement at the same path, F11 mounts the new contents. The drive remains empty after a failed image load and can retry when the image is available.
 - [x] Existing raw and DiskCopy validation, read-only behavior, writable checkpoint failure recovery, SCSI boot and desktop controls pass regression checks.
