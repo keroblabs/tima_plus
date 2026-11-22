@@ -118,13 +118,39 @@ see the current state.  For example, you can capture screenshots from
 screen memory (see `tools/mem2scr.c`).
 
 For standalone firmware tests, use `--raw-rom -r /path/to/test.rom`.
-This opt-in accepts a regular 128 KiB raw 68000 reset image and enables
-the MC68681 debug device at `0xC00000–0xC0001F`. Its sixteen registers use
-odd byte addresses. The guest polls transmit-ready at `0xC00013`, writes
-UART-B data to `0xC00017`, and uMac forwards the bytes to stdout. The
-standard Plus V3 boot mode uses the M0001AP hardware map. Run from a
-separate working directory because uMac truncates `ram.bin` on launch.
-See [Tima Boot](../tima_rom/) for a ROM that exercises this console.
+This option accepts a regular 128 KiB raw MC68000 reset image; it is
+**not** supposed to be the eventual debug-device enable switch.
+Run from a separate working directory because uMac truncates `ram.bin`
+on launch. See [Tima ROM](../tima_rom/) for a standalone ROM experiment.
+
+### Development-only MC68681 debug peripheral
+
+The MC68681 DUART at `0xC00000–0xC0001F` is **an artificial uMac
+development peripheral, not part of the physical Macintosh Plus
+M0001AP**. It implements sixteen 8-bit registers in the MC68000's
+lower byte lane (odd addresses). Channel B transmit-ready is at
+`0xC00013` and transmit data at `0xC00017`.
+
+**Current behaviour (review pending):** This branch enables the MC68681
+and forwards Channel B to stdout **only in `--raw-rom` sessions**. The
+UART-B regression test and the Tima ROM smoke test cover that path.
+
+**Required behaviour for development:** The MC68681 must be available
+when enabled in a **development emulator build**, regardless of whether
+the guest is the original Plus V3 ROM booting an 800K floppy or an
+alternate raw ROM. ROM choice and debug peripheral availability must
+be independent. This is the outstanding reviewer request on
+[PLUS-ROM-0002](../../docs/tasks/db/PLUS-ROM-0002.md); it is **not yet
+implemented or regression-tested**. Keeping UART-B stdout output is
+sufficient for now; a bidirectional socket interface is deferred.
+
+**Production/hardware compatibility:** The real M0001AP does **not**
+contain an MC68681 at this address. The final production configuration
+must **disable/compile out the development DUART** and preserve the
+standard Macintosh memory map. Guest debug-console use must be
+development-only or optional; the physical Tima/Plus build must never
+require access to this address. A build-time development-hardware
+switch should make this separation explicit and testable.
 
 For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
 
