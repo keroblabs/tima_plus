@@ -67,7 +67,7 @@ The local Plus V3 ROM and DiskCopy image matched their starting SHA-256 values a
 | DONE | Port the peripheral and connect UART-B to host stdout | Assignee (Codex) | uMac raw ROM path and `m68681_debug_uart` |
 | DONE | Build and run the ROM with its own `printf` | Assignee (Codex) | Tima Boot smoke test and fixture evidence |
 | DONE | Run emulator and toolchain regression suites | Assignee (Codex) | Verification results above |
-| PENDING | Record the implementation commit hash | Assignee (Codex) | Commits table |
+| DONE | Record the implementation commit | Assignee (Codex) | `9915021` in the Commits table |
 | PENDING | Review the implementation and evidence | Reviewer (project owner) | Local handoff |
 
 **Notes**
@@ -80,6 +80,7 @@ The local Plus V3 ROM and DiskCopy image matched their starting SHA-256 values a
 - **2026-11-22 — ASSIGNEE (Codex) — Rework:** An internal-linkage `boot_count` trial produced an unresolved local `.comm` symbol in the installed assembler/linker path. Restored the existing external boot-variable linkage and verified the `.bss` address, copy/clear behavior and clean freestanding link with the installed binaries.
 - **2026-11-22 — ASSIGNEE (Codex) — Verification:** The ROM emits the formatted startup values and `ROM_TEST_PASS` over UART-B. Verified live capture, clean shutdown, validation rejections, the two guest failure messages, formatter boundaries and poisoned-RAM startup. Both uMac build paths passed the ROM smoke test. The previous ROM also passed its acceptance test with the updated uMac. All 18 uMac CTests and the vport State 1 suite passed. Commands and captures are listed above.
 - **2026-11-22 — ASSIGNEE (Codex) — Status Change:** Moved the ticket to `REVIEW` for the project owner. Verification covers the polled emulator console and the ROM build and boot path.
+- **2026-11-22 — ASSIGNEE (Codex) — Local Commit:** Recorded the implementation, tests and evidence as `9915021c246a7d6563d61c2f42fa3280f81dcd58` on `pre-release-rom-test`. The index and ticket match on status, title and kind. Project-owner review is pending.
 
 **Proposed Change**
 
@@ -91,6 +92,7 @@ Keep the ROM's reset, `.data` and `.bss` checks. Replace the RAM mailbox with se
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
+| `pre-release-rom-test` | `9915021` | `UNREVIEWED` | Port MC68681, route UART-B to stdout, and verify standalone ROM output using the local vbcc tools. |
 
 **Resolution Description**
 
