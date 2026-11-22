@@ -147,16 +147,31 @@ output. The production build runs `m68681_production_map` to verify the
 unmapped window. See [PLUS-ROM-0002](../../docs/tasks/db/PLUS-ROM-0002.md)
 for the test evidence.
 
-For a `DEBUG` build, add `-i` to get a disassembly trace of execution.
+For a `DEBUG` build, add `--trace-instructions` to get a disassembly trace
+of execution. The legacy `-i` without a path also enables tracing.
 
 Use `-W loaded.rom` to dump the loaded ROM bytes for comparison with the
 input file. `--trace-iwm` reports ROM PCs, virtual ticks, drive-control signals,
 IWM status, and write and checkpoint outcomes.
 
-### Writable floppies
+### Floppy insertion and writes
 
-Use `-d disk.image -w` to enable persistent floppy writes. `-d` alone mounts
-the floppy write protected. `-p` enables SCSI writes independently.
+Use `-d disk.image` to insert an image at startup, or `-i disk.image` to
+assign its path and start with the drive empty. For example, boot from SCSI
+with a floppy ready to insert on demand:
+
+```sh
+./build-cmake/umac -r rom.bin -s HD10_512.hda -i floppy-disk.image -w
+```
+
+Press **F11** in the emulator window to insert the assigned image into an
+empty drive. Use Finder's Eject command to remove it. While the drive is
+empty, you can overwrite or replace the image at the same path. Each F11
+insertion reads that file afresh. If the file is missing or invalid, correct
+it and press F11 again. F11 also reinserts images originally passed with `-d`.
+
+Add `-w` to either floppy option to enable persistent writes. The default
+is write protection. `-p` enables SCSI writes independently.
 
 Tagged DiskCopy 4.2 images preserve both the 512-byte data and the 12-byte tag
 of every sector. Raw `.dsk` images save the 512-byte sector data even when the
@@ -168,7 +183,7 @@ lose nonzero tags.
 The emulator saves dirty tracks when moving to another cylinder, ejecting, or
 closing the window. A failed save blocks the move, eject or close and reports
 the error. The `.iwm.lock` sidecar coordinates writable sessions across atomic
-replacements of the image file.
+replacements of the image file. Successful eject releases that lock.
 
 ### Floppy tests
 
@@ -202,7 +217,7 @@ protection during startup, then exercise the writable drive with `.Sony`.
 
 ## SCSI hard disks
 
-Without `-d`, the floppy drive is installed and empty. SCSI works with or without a floppy.
+Without `-d`, the floppy drive starts empty. SCSI works with or without a floppy.
 Attach a raw, whole-device image read-only with `-s`:
 
 ```sh

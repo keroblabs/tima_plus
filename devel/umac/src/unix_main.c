@@ -51,13 +51,14 @@ static void     print_help(char *n)
         printf("Syntax: %s <options>\n"
                "\t-r <rom path>\t\tDefault 'rom.bin'\n"
                "\t-W <rom dump path>\tDump the original ROM bytes\n"
-               "\t-d <floppy path>\tAttach a raw or DiskCopy 4.2 Macintosh 800K image (read-only)\n"
-               "\t-w\t\t\tEnable persistent floppy writes (requires -d)\n"
+               "\t-d <floppy path>\tInsert a Macintosh 800K image at startup (default R/O)\n"
+               "\t-i <floppy path>\tAssign an image and start empty (F11 inserts it)\n"
+               "\t-w\t\t\tEnable persistent floppy writes (requires -d or -i <path>)\n"
                "\t-s <SCSI image path>\tAttach a raw 512-byte-sector hard disk (default R/O)\n"
                "\t-t <target ID>\t\tSCSI target ID, 0-6 (default 1)\n"
                "\t-p\t\t\tEnable persistent SCSI hard disk writes (requires -s)\n"
                "\t-P <pram path>\t\tRTC/PRAM backing file (default 'pram.nv')\n"
-               "\t-i\t\t\tDisassembled instruction trace\n"
+               "\t--trace-instructions\tDisassembled instruction trace (also bare -i)\n"
                "\t--trace-iwm\t\tTrace IWM and Sony drive events\n"
                "\t--raw-rom\t\tBoot a 128 KiB raw reset ROM and skip the Plus V3 checksum\n", n);
 }
@@ -154,11 +155,12 @@ static char     *canonical_path_for_create(const char *path)
 static int      paths_alias(const char *a, const char *b, bool *alias)
 {
         char *canonical_a = canonical_path_for_create(a);
+        if (!canonical_a)
+                return -1;
         char *canonical_b = canonical_path_for_create(b);
-        if (!canonical_a || !canonical_b) {
+        if (!canonical_b) {
                 int saved_errno = errno;
                 free(canonical_a);
-                free(canonical_b);
                 errno = saved_errno;
                 return -1;
         }
@@ -198,6 +200,75 @@ static int      find_path_alias(const char *path, const char *const *protected_p
         return 0;
 }
 
+static bool     validate_distinct_path(const char *kind, const char *path,
+                                       const char *const *protected_paths, size_t protected_count)
+{
+        const char *conflicting_path = NULL;
+        int conflict = find_path_alias(path, protected_paths, protected_count, &conflicting_path);
+        if (conflict > 0)
+                fprintf(stderr, "%s path '%s' conflicts with media/output path '%s'\n",
+                        kind, path, conflicting_path);
+        else if (conflict < 0)
+                fprintf(stderr, "Cannot validate %s path '%s': %s\n", kind, path, strerror(errno));
+        return conflict == 0;
+}
+
+static bool     validate_floppy_path(const char *path, bool writable,
+                                     const char *const *protected_paths, size_t protected_count)
+{
+        if (!validate_distinct_path("Floppy", path, protected_paths, protected_count))
+                return false;
+        if (!writable)
+                return true;
+
+        char *lock_path = disk_img_lock_path(path);
+        if (!lock_path) {
+                fprintf(stderr, "Cannot validate writable floppy lock for '%s': %s\n", path, strerror(errno));
+                return false;
+        }
+        bool valid = validate_distinct_path("Writable floppy lock", lock_path, &path, 1) &&
+                     validate_distinct_path("Writable floppy lock", lock_path, protected_paths, protected_count);
+        free(lock_path);
+        return valid;
+}
+
+static void     report_floppy_error(const char *path)
+{
+        const char *message;
+        if (errno == EINVAL)
+                message = "expected a raw or DiskCopy 4.2 Macintosh 800K image";
+        else if (errno == EBADMSG)
+                message = "DiskCopy 4.2 checksum mismatch";
+        else
+                message = strerror(errno);
+        fprintf(stderr, "Floppy '%s': %s\n", path ? path : "(empty drive)", message);
+}
+
+static void     print_inserted_floppy(const char *path, bool writable)
+{
+        printf("Floppy: '%s' (800K, %s)\n", path, writable ? "writable" : "write protected");
+}
+
+static void     insert_assigned_floppy(struct disk_img *disk, const char *path, bool writable,
+                                       const char *const *protected_paths, size_t protected_count,
+                                       int scsi_fd)
+{
+        if (!path || disk_img_inserted(disk))
+                return;
+        if (scsi_fd >= 0 && same_file(scsi_fd, path)) {
+                fprintf(stderr, "Floppy '%s' conflicts with the mounted SCSI image\n", path);
+                return;
+        }
+        if (!validate_floppy_path(path, writable, protected_paths, protected_count))
+                return;
+        if (disk_img_insert(disk, path, writable) < 0) {
+                report_floppy_error(path);
+                return;
+        }
+        print_inserted_floppy(path, writable);
+        fflush(stdout);
+}
+
 /* Blit a 1bpp FB to a 32BPP RGBA output.  SDL2 doesn't appear to support
  * bitmap/1bpp textures, so expand.
  */
@@ -234,6 +305,7 @@ int     main(int argc, char *argv[])
         int opt_disassemble = 0;
         bool opt_iwm_trace = false;
         bool raw_rom = false;
+        bool insert_at_startup = false;
         bool floppy_write = false;
         const char *scsi_filename = NULL;
         int scsi_id = -1;
@@ -246,6 +318,7 @@ int     main(int argc, char *argv[])
         // Args
 
         const struct option long_options[] = {
+                {"trace-instructions", no_argument, NULL, 'T'},
                 {"trace-iwm", no_argument, NULL, 'I'},
                 {"raw-rom", no_argument, NULL, 'R'},
                 {0}
@@ -257,11 +330,21 @@ int     main(int argc, char *argv[])
                         break;
 
                 case 'i':
+                        /* Accept a following path and retain the legacy
+                         * no-argument option, including grouped flags. */
+                        if (optind < argc && argv[optind][0] != '-') {
+                                disc_filename = argv[optind++];
+                                insert_at_startup = false;
+                                break;
+                        }
+                        /* fall through */
+                case 'T':
                         opt_disassemble = 1;
                         break;
 
                 case 'd':
                         disc_filename = optarg;
+                        insert_at_startup = true;
                         break;
 
                 case 'w':
@@ -307,7 +390,7 @@ int     main(int argc, char *argv[])
                 }
         }
         if (floppy_write && !disc_filename) {
-                fprintf(stderr, "-w requires a floppy image (-d)\n");
+                fprintf(stderr, "-w requires a floppy image (-d or -i <path>)\n");
                 return 1;
         }
         if (!scsi_filename && (scsi_id != -1 || scsi_write)) {
@@ -317,9 +400,19 @@ int     main(int argc, char *argv[])
         if (scsi_id == -1)
                 scsi_id = 1;
 
+        const char *startup_floppy_path = disc_filename;
+        if (disc_filename && !insert_at_startup) {
+                /* Keep checking aliases when the containing directory exists.
+                 * If it is absent too, check the path when the user inserts. */
+                char *resolved = canonical_path_for_create(disc_filename);
+                if (!resolved && errno == ENOENT)
+                        startup_floppy_path = NULL;
+                free(resolved);
+        }
+
         /* RAM and ROM dumps are writable outputs. Reject aliases of the
          * read-only inputs before creating or truncating either output. */
-        const char *inputs[] = {rom_filename, disc_filename, scsi_filename, rom_dump_filename};
+        const char *inputs[] = {rom_filename, startup_floppy_path, scsi_filename, rom_dump_filename};
         size_t count = sizeof(inputs) / sizeof(inputs[0]);
         const char *conflicting_path = NULL;
         int conflict = find_path_alias(ram_filename, inputs, count, &conflicting_path);
@@ -348,7 +441,7 @@ int     main(int argc, char *argv[])
         }
         const char *protected_paths[] = {
                 rom_filename, ram_filename, rom_dump_filename,
-                disc_filename, scsi_filename
+                startup_floppy_path, scsi_filename
         };
         conflict = find_path_alias(pram_path, protected_paths,
                                    sizeof(protected_paths) / sizeof(protected_paths[0]),
@@ -387,38 +480,22 @@ int     main(int argc, char *argv[])
                 return 1;
         }
 
-        if (floppy_write) {
-                const char *other_media[] = {rom_filename, scsi_filename};
-                conflict = find_path_alias(disc_filename, other_media, 2, &conflicting_path);
-                char *floppy_lock = NULL;
-                if (!conflict) {
-                        const char *lock_protected[] = {rom_filename, ram_filename, rom_dump_filename,
-                                                         disc_filename, scsi_filename, pram_path, pram_lock_path};
-                        floppy_lock = disk_img_lock_path(disc_filename);
-                        conflict = floppy_lock ? find_path_alias(floppy_lock, lock_protected,
-                                                                 sizeof(lock_protected) / sizeof(lock_protected[0]),
-                                                                 &conflicting_path) : -1;
-                }
-                if (conflict != 0) {
-                        const char *path = floppy_lock ? floppy_lock : disc_filename;
-                        if (conflict > 0)
-                                fprintf(stderr, "Writable floppy path '%s' conflicts with media/output path '%s'\n",
-                                        path, conflicting_path);
-                        else
-                                fprintf(stderr, "Cannot validate writable floppy path '%s': %s\n", path, strerror(errno));
-                        free(floppy_lock);
-                        free(pram_lock_path);
-                        free(pram_path);
-                        return 1;
-                }
-                free(floppy_lock);
+        const char *floppy_protected[] = {
+                rom_filename, ram_filename, rom_dump_filename, scsi_filename, pram_path, pram_lock_path
+        };
+        size_t floppy_protected_count = sizeof(floppy_protected) / sizeof(floppy_protected[0]);
+        if (floppy_write && startup_floppy_path &&
+            !validate_floppy_path(startup_floppy_path, true, floppy_protected, floppy_protected_count)) {
+                free(pram_lock_path);
+                free(pram_path);
+                return 1;
         }
-        free(pram_lock_path);
 
         int pram_state = rtc_pram_check(pram_path);
         if (pram_state < 0) {
                 fprintf(stderr, "RTC/PRAM backing file '%s' is invalid or inaccessible: %s\n",
                         pram_filename, strerror(errno));
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
@@ -430,6 +507,7 @@ int     main(int argc, char *argv[])
         ofd = open(rom_filename, O_RDONLY | O_NONBLOCK);
         if (ofd < 0) {
                 perror("ROM");
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
@@ -438,6 +516,7 @@ int     main(int argc, char *argv[])
         if (fstat(ofd, &sb) || !S_ISREG(sb.st_mode) || sb.st_size != ROM_SIZE) {
                 fprintf(stderr, "ROM '%s': expected a regular 128 KiB ROM file\n", rom_filename);
                 close(ofd);
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
@@ -445,6 +524,7 @@ int     main(int argc, char *argv[])
         close(ofd);
         if (rom_base == MAP_FAILED) {
                 perror("ROM mmap");
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
@@ -452,6 +532,7 @@ int     main(int argc, char *argv[])
                 fprintf(stderr, "ROM '%s': expected Macintosh Plus V3 with checksum %08" PRIx32 "\n",
                         rom_filename, ROM_PLUS_V3_CHECKSUM);
                 munmap(rom_base, ROM_SIZE);
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
@@ -460,22 +541,19 @@ int     main(int argc, char *argv[])
         else
                 printf("Macintosh Plus V3 ROM, checksum %08" PRIx32 "\n", ROM_PLUS_V3_CHECKSUM);
 
-        floppy = floppy_write ? disk_img_open_writable(disc_filename) : disk_img_open(disc_filename);
+        const char *mounted_path = insert_at_startup ? disc_filename : NULL;
+        floppy = mounted_path && floppy_write ? disk_img_open_writable(mounted_path) : disk_img_open(mounted_path);
         if (!floppy) {
-                const char *message;
-                if (errno == EINVAL)
-                        message = "expected a raw or DiskCopy 4.2 Macintosh 800K image";
-                else if (errno == EBADMSG)
-                        message = "DiskCopy 4.2 checksum mismatch";
-                else
-                        message = strerror(errno);
-                fprintf(stderr, "Floppy '%s': %s\n", disc_filename ? disc_filename : "(empty drive)", message);
+                report_floppy_error(mounted_path);
                 munmap(rom_base, ROM_SIZE);
+                free(pram_lock_path);
                 free(pram_path);
                 return 1;
         }
-        if (disc_filename)
-                printf("Floppy: '%s' (800K, %s)\n", disc_filename, floppy_write ? "writable" : "write protected");
+        if (mounted_path)
+                print_inserted_floppy(mounted_path, floppy_write);
+        else if (disc_filename)
+                printf("Floppy '%s' assigned (F11 inserts it)\n", disc_filename);
 
         struct scsi_image scsi_image;
         struct scsi_disk scsi_disk;
@@ -642,6 +720,13 @@ int     main(int argc, char *argv[])
 
                         case SDL_KEYDOWN:
                         case SDL_KEYUP: {
+                                if (event.key.keysym.scancode == SDL_SCANCODE_F11) {
+                                        if (event.type == SDL_KEYDOWN && !event.key.repeat)
+                                                insert_assigned_floppy(floppy, disc_filename, floppy_write,
+                                                                       floppy_protected, floppy_protected_count,
+                                                                       scsi_filename ? scsi_image.fd : -1);
+                                        break;
+                                }
                                 if (event.key.keysym.scancode == SDL_SCANCODE_F12) {
                                         if (event.type == SDL_KEYDOWN) {
                                                 set_mouse_capture(window, SDL_FALSE);
@@ -738,6 +823,7 @@ close_media:
         if (disk_img_close(floppy) < 0)
                 result = 1;
         munmap(rom_base, ROM_SIZE);
+        free(pram_lock_path);
         free(pram_path);
         return result;
 }

@@ -602,16 +602,52 @@ static int prepare_writable(struct disk_img *disk, const char *path)
         return disk->write ? 0 : -1;
 }
 
-static struct disk_img *open_disk(const char *path, bool writable)
+static void release_media(struct disk_img *disk)
 {
-        struct disk_img *disk = calloc(1, sizeof(*disk));
-        if (!disk || !path)
-                return disk;
+        struct writable_image *file = disk->writable;
+        if (file) {
+                if (file->lock_fd >= 0)
+                        close(file->lock_fd);
+                if (file->dir_fd >= 0)
+                        close(file->dir_fd);
+                free(file->lock_path);
+                free(file->path);
+                free(file);
+        }
+        free(disk->write);
+        free(disk->image);
+        disk->writable = NULL;
+        disk->write = NULL;
+        disk->image = NULL;
+        disk->image_size = 0;
+        disk->data = disk->tags = NULL;
+        disk->tag_checksum_skip = 0;
+        disk->inserted = false;
+        memset(disk->tracks, 0, sizeof(disk->tracks));
+        disk->status.write_result = DISK_IMG_WRITE_IDLE;
+        disk->status.write_bits = 0;
+}
+
+bool disk_img_inserted(const struct disk_img *disk)
+{
+        return disk && disk->inserted;
+}
+
+int disk_img_insert(struct disk_img *disk, const char *path, bool writable)
+{
+        if (!disk || !path || !*path) {
+                errno = EINVAL;
+                return -1;
+        }
+        if (disk->inserted) {
+                errno = EBUSY;
+                return -1;
+        }
 
         int flags = writable ? O_RDWR | O_NOFOLLOW : O_RDONLY;
         int fd = open(path, flags | O_CLOEXEC | O_NONBLOCK);
         if (fd < 0)
-                goto fail;
+                return -1;
 
         struct stat opened;
         struct stat named;
@@ -642,16 +678,30 @@ static struct disk_img *open_disk(const char *path, bool writable)
                         goto fail;
         }
         close(fd);
+        disk->status.spindle = false;
+        disk->status.ready_at = 0;
+        disk->rotation = 0;
         disk->inserted = true;
-        return disk;
+        return 0;
 
 fail:
         error = errno;
-        if (fd >= 0)
-                close(fd);
-        disk_img_close(disk);
+        close(fd);
+        release_media(disk);
         errno = error;
-        return NULL;
+        return -1;
+}
+
+static struct disk_img *open_disk(const char *path, bool writable)
+{
+        struct disk_img *disk = calloc(1, sizeof(*disk));
+        if (disk && path && disk_img_insert(disk, path, writable) < 0) {
+                int error = errno;
+                free(disk);
+                errno = error;
+                return NULL;
+        }
+        return disk;
 }
 
 struct disk_img *disk_img_open(const char *path)
@@ -861,19 +911,7 @@ int disk_img_close(struct disk_img *disk)
         disk_img_abort_write(disk);
         if (disk_img_checkpoint(disk) < 0)
                 return -1;
-
-        struct writable_image *file = disk->writable;
-        if (file) {
-                if (file->lock_fd >= 0)
-                        close(file->lock_fd);
-                if (file->dir_fd >= 0)
-                        close(file->dir_fd);
-                free(file->lock_path);
-                free(file->path);
-                free(file);
-        }
-        free(disk->write);
-        free(disk->image);
+        release_media(disk);
         free(disk);
         return 0;
 }
@@ -1075,8 +1113,9 @@ void disk_img_command(struct disk_img *disk, unsigned int reg, bool value)
                         disk_img_abort_write(disk);
                         if (disk_img_checkpoint(disk) < 0)
                                 break;
-                        disk->inserted = false;
+                        release_media(disk);
                         status->spindle = false;
+                        status->ready_at = 0;
                 }
                 break;
         }

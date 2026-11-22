@@ -52,6 +52,10 @@ struct disk_img *disk_img_open(const char *path);
  * lock path when using it to check for aliases with other host files. */
 char *disk_img_lock_path(const char *path);
 struct disk_img *disk_img_open_writable(const char *path);
+bool disk_img_inserted(const struct disk_img *disk);
+/* Load a fresh image into an empty drive between emulation slices.
+ * Returns -1 with errno set on error, including EBUSY if media is present. */
+int disk_img_insert(struct disk_img *disk, const char *path, bool writable);
 int disk_img_checkpoint(struct disk_img *disk);
 /* On checkpoint failure, return -1 with the disk still owned by the caller. */
 int disk_img_close(struct disk_img *disk);

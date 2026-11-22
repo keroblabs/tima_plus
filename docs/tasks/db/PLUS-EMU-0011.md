@@ -2,7 +2,7 @@
 
 **ID:** `PLUS-EMU-0011`
 
-**Status:** `OPEN`
+**Status:** `REVIEW`
 
 **Title:** Insert and reinsert the assigned uMac floppy with F11
 
@@ -25,19 +25,63 @@ uMac can insert an 800K floppy at startup with `-d`. After ejecting it through F
 - `devel/umac/src/unix_main.c` opens `-d` at startup. Its `-i` currently enables instruction tracing, and its SDL keyboard handler reserves F12 for releasing the mouse.
 - `devel/umac/src/disk_img.c` completes Sony EJECT by checkpointing dirty tracks, clearing media presence and stopping the spindle. The drive retains the old image and any writable sidecar lock until host close. The IWM drive lifecycle and Sony sense signals are defined in [Document 04 §12.10](../../04-iwm-emulation.md#1210-disk-lifecycle-insertion-eject-and-drive-power-software-and-future-stm32). [PLUS-EMU-0010](PLUS-EMU-0010.md) records the underlying checkpoint and persistence behavior.
 
+The two source observations above describe the inspected baseline. The implementation keeps the installed drive at the same address in the IWM and replaces its media state only after a successful load or checkpoint. F11 handles the first key-down while the drive is empty, consumes the host key and reloads the originally assigned path. Writable media acquire the existing sidecar lock on insertion and release it on successful eject. The launcher checks the current image and lock paths for aliases on each insertion because they can change between ejections.
+
+### Verification
+
+| Configuration or test | Result | Evidence |
+| --- | --- | --- |
+| Baseline Release, 4 MiB, tagged DiskCopy, real Plus ROM | PASS, 19/19 CTest | Reference build of uMac at `82db564`, including original-ROM boot, write, format, SDL timing and DUART disk tests |
+| Modified Release, 4 MiB, tagged DiskCopy, real Plus ROM | PASS, 19/19 CTest | Expanded DiskCopy test verifies Sony senses, lock contention and release, retry after malformed media, read-only remount and complete first-track data and tag decoding after rewriting the same path as raw. Checkpoint test reopens for writing while the ejected drive still exists. |
+| Modified Release, 1 MiB, raw 800K, real Plus ROM | PASS, 18/18 CTest | Raw image derived from the tagged fixture's data area. Includes original-ROM boot, write and format. CMake registers the SDL timing test on 4 MiB only. |
+| Modified Debug, stock M0001AP map, DUART disabled | PASS, 13/13 CTest | Generated fixtures and `m68681_production_map` |
+| Floppy path guards | PASS | `iwm_media_protection` checks startup aliases for `-d` and `-i`, the `-w` requirement and grouped legacy options. The SDL session also rejected a replacement symlink to `ram.bin`. |
+| Standalone Make and instruction tracing | PASS | `make -j3 DEBUG=1` in an isolated copy. Bare `-i` and `--trace-instructions` each emitted disassembly from a generated reset ROM. |
+| HFS converter and heap checks | PASS | Four `test_hfs_to_device.py` cases. The DiskCopy, checkpoint and media protection CTests also passed with `MALLOC_PERTURB_=205`. |
+| GCC AddressSanitizer and UndefinedBehaviorSanitizer | NOT TESTED | The host C compiler link check failed because `libasan.so.8.0.0` and `libubsan.so.1.0.0` were missing. |
+
+The builds used GCC 15.2.1, CMake 3.31.6, SDL 2.32.64 and the local `vasmm68k_std`. Release retained the baseline Musashi compiler warnings. Source media were copied to a temporary directory. SHA-256 checks confirmed the workspace ROM, SCSI disk and both floppy files retained their original bytes. The raw CTest fixture SHA-256 was `7f9f78a08aa19bafe5700e81675aa3ac212f4f601b6d209f64d49d8cf339f600`.
+
+### Original-ROM Finder insert, eject and replacement
+
+The SDL frontend ran offscreen with the Plus V3 ROM (`4d1f8172`), `HD10_512.hda` read-only and `-i media/floppy-disk.image -w`. A temporary driver queued SDL key and mouse events. Finder booted from `Macintosh` on SCSI (driver `-34`) with the assigned directory absent. F11 reported the missing path and later rejected a malformed image and a RAM alias. The drive stayed empty through those attempts. A repeat key-down and key-up were ignored. Each subsequent F11 mounted the expected guest volume on `.Sony` (driver `-5`). Command-E in Finder ejected each disk, left only `Macintosh` mounted, and released the lock as verified by taking it from a second host process. F11 while mounted preserved the volume and lock.
+
+| Host change before F11 | Finder volume | SHA-256 before F11 | SHA-256 after Finder eject |
+| --- | --- | --- | --- |
+| Create raw 800K file, 819,200 bytes | `Swap Raw One` | `1e9d17225877c63e78e7ad57a0f091f12e952b65af6180b2bea8894efd3f3b3c` | `512d6397c03db78c75853ba7cb9dbea7fc91f6a701329e47bfde3e649c51af77` |
+| Overwrite the same inode with tagged DiskCopy 4.2, 838,484 bytes | `Swap Tagged2` | `3eb149fed1d48b9f55d25bc6c4815cc1dd6bd82cebf86c59f1c1e3e4d800f15b` | `f985439ebbb18a7e565865fe20c30a3552e60ccba34a342d41089447500b1791` |
+| Rename a new tagged DiskCopy 4.2 file over the assigned path and verify the inode changed | `Swap Tagged3` | `b678bf2d5c71a83ca80f35da1025a44af7dc6240d92015f4cbda915be0422550` | `2e42006b3f058ddcf623212f5dc93cd77595a76c69fc62a06299790c67fd4c81` |
+
+The first mount and eject produced the following IWM observations. The later two cycles repeated the same media and spindle transitions.
+
+| C8M tick | ROM PC | Observation |
+| ---: | --- | --- |
+| 359,285,288 | `$418606` | Sony sense register 1 returned `$BF`, with `/CSTIN` high and the drive empty. |
+| 1,758,534,192 | `$418606` | After F11, Sony sense register 1 returned `$3F`, with `/CSTIN` low and the spindle still off. |
+| 4,545,051,552 | `$417FDA` | Finder's Sony EJECT strobed command 6 with CA2 high. The spindle was off, the medium was absent and the trace reported `save_error=0`. |
+| 4,545,838,792 | `$418606` | The ROM read `$BF` from sense register 1 after eject. |
+
+Separate read-only controls used a valid data floppy already on disk at startup. `-i` left it empty until F11. `-d` inserted it immediately, the ROM ejected it while falling back to SCSI boot, and F11 mounted it again. Finder eject left both control images byte-identical and neither acquired a writable lock. An unassigned session handled F11 and F12 without transmitting either key to the guest. Full logs and screenshots from this run are under `/tmp/plus-emu-0011.4oNkDc/`; the screenshots and filtered guest trace are in `replacement-zbgkkbzb/`.
+
+To repeat the desktop check, start uMac in a private working directory with an original Plus ROM and bootable SCSI image. Pass `-i floppy-disk.image -w --trace-iwm` and use disposable floppy copies. Wait for SCSI Finder, copy a floppy image to the assigned name and press F11. Select its icon and press Command-E. Write a differently named Macintosh volume to that same host path and press F11 again. Confirm Finder shows the new volume and the trace shows `/CSTIN` changing between `$BF` and `$3F`. The test used an offscreen SDL window. Physical key delivery through the owner's Wayland session is pending owner review.
+
 **Current Work**
 
 | State | Work / acceptance evidence | Responsible | Next action / reference |
 | --- | --- | --- | --- |
 | DONE | Register owner requirements and inspect startup, input and eject code | Reporter (Codex) | Opened on the designated branch |
-| PENDING | Implement assigned-path insertion and writable-media release | Assignee (Codex) | Verify the proposed behavior |
-| PENDING | Exercise Finder eject and host replacement with the original ROM | Assignee (Codex) | Record test results and local commits |
-| PENDING | Review the implementation and evidence | Reviewer (project owner) | Review the assignee handoff |
+| DONE | Implement assigned-path insertion and writable-media release | Assignee (Codex) | See the implementation commit and uMac README |
+| DONE | Exercise Finder eject and host replacement with the original ROM | Assignee (Codex) | See the build, test and trace evidence above |
+| PENDING | Review the local implementation and accept the result | Reviewer (project owner) | Review the commit and exercise the Wayland launch |
 
 **Notes**
 
 - **2026-11-22 — REPORTER (Codex, on behalf of the project owner) — Request:** Preserve `-d devel/umac/floppy-disk.image` for insertion at startup. Add `-i devel/umac/floppy-disk.image` to assign the path with the drive empty. F11 should insert the assigned image after startup and after each successful Finder eject. The user can overwrite the file in place or replace it at that path while the disk is ejected. Finder controls eject on the M0001AP.
 - **2026-11-22 — REPORTER (Codex) — Discovery:** Confirmed by source inspection that the frontend has no host insertion handler, `-i` is already a trace flag, and the existing eject path leaves the image and writable lock allocated. Runtime verification is pending.
+- **2026-11-22 — ASSIGNEE (Codex) — Decision and status change:** The owner requested both the ticket and its implementation on `pre-release-umac-disk-insert`. Recorded the open ticket in `0d08ce6` and moved it to `IN_PROGRESS`. The existing IWM drive object will retain its mechanical state across media changes. Both floppy options will remember the path for F11, and bare `-i` will continue to enable the trace.
+- **2026-11-22 — ASSIGNEE (Codex) — Implementation:** Added deferred CLI assignment and SDL F11 handling. Reused format validation and writable locking for each load, and reused the checkpoint path for Finder eject. Cleared the old image, encoded tracks and IWM latch on completed eject. Added regression checks for replacement and startup path aliases. Updated the working VS Code floppy option to `-i`; the local launch configuration and media were kept outside the implementation commit.
+- **2026-11-22 — ASSIGNEE (Codex) — Rework and verification:** The first SDL run reported an incorrect error for a missing parent directory. Preserved the error from the failed path lookup and confirmed the frontend reports the missing path and can retry. The 4 MiB tagged, 1 MiB raw and production-map CTest runs passed 19/19, 18/18 and 13/13. Confirmed the Finder eject and replacement sequence using actual SDL input events and the unmodified ROM. Recorded logs, checksums and the optional sanitizer limitation above.
+- **2026-11-22 — ASSIGNEE (Codex) — Status change:** Moved `IN_PROGRESS` → `REVIEW` after verification. Owner review and acceptance are pending.
 
 **Proposed Change**
 
@@ -45,10 +89,10 @@ Keep the emulated internal drive installed and track its medium separately from 
 
 Acceptance criteria and required evidence
 
-- [ ] `-d` still inserts at startup. `-i` starts with the drive installed and empty, including when the image file is absent at launch.
-- [ ] F11 inserts the assigned image through the original ROM's Sony drive interface. With a disk present or with no path assigned, F11 leaves the drive unchanged.
-- [ ] Finder eject releases the image and its writable lock after a successful checkpoint. After in-place overwrite or replacement at the same path, F11 mounts the new contents. The drive remains empty after a failed image load and can retry when the image is available.
-- [ ] Existing raw and DiskCopy validation, read-only behavior, writable checkpoint failure recovery, SCSI boot and desktop controls pass regression checks.
+- [x] `-d` still inserts at startup. `-i` starts with the drive installed and empty, including when the image file is absent at launch.
+- [x] F11 inserts the assigned image through the original ROM's Sony drive interface. With a disk present or with no path assigned, F11 leaves the drive unchanged.
+- [x] Finder eject releases the image and its writable lock after a successful checkpoint. After in-place overwrite or replacement at the same path, F11 mounts the new contents. The drive remains empty after a failed image load and can retry when the image is available.
+- [x] Existing raw and DiskCopy validation, read-only behavior, writable checkpoint failure recovery, SCSI boot and desktop controls pass regression checks.
 
 **Commits**
 

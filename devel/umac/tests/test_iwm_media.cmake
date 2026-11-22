@@ -7,9 +7,9 @@ file(WRITE "${floppy}" "Floppy fixture bytes\n")
 file(SHA256 "${rom}" rom_before)
 file(SHA256 "${floppy}" floppy_before)
 
-function(expect_rejection diagnostic)
+function(expect_rejection floppy_option diagnostic)
     execute_process(
-        COMMAND "${UMAC}" -r "${rom}" -d "${floppy}" ${ARGN}
+        COMMAND "${UMAC}" -r "${rom}" "${floppy_option}" "${floppy}" ${ARGN}
         WORKING_DIRECTORY "${TEST_DIR}"
         RESULT_VARIABLE result
         OUTPUT_VARIABLE stdout
@@ -30,12 +30,16 @@ execute_process(COMMAND "${UMAC}" -w WORKING_DIRECTORY "${TEST_DIR}"
 if(no_floppy EQUAL 0 OR NOT no_floppy_error MATCHES "-w requires a floppy image")
     message(FATAL_ERROR "Expected -w to require a floppy: ${no_floppy_error}")
 endif()
-expect_rejection("conflicts with media/output" -W "${rom}")
-expect_rejection("conflicts with media/output" -W "${floppy}")
-expect_rejection("conflicts with media/output" -w -s "${floppy}")
-expect_rejection("conflicts with media/output" -w -P "${floppy}.iwm.lock")
-expect_rejection("conflicts with media/output" -w -W "${floppy}.iwm.lock")
 file(REMOVE "${ram}")
 file(CREATE_LINK "${floppy}" "${ram}")
-expect_rejection("conflicts with media/output")
+expect_rejection(-d "conflicts with media/output")
+expect_rejection(-i "conflicts with media/output")
 file(REMOVE "${ram}")
+foreach(option IN ITEMS -d -i)
+    expect_rejection("${option}" "conflicts with media/output" -W "${rom}")
+    expect_rejection("${option}" "conflicts with media/output" -W "${floppy}")
+    expect_rejection("${option}" "conflicts with media/output" -w -s "${floppy}")
+    expect_rejection("${option}" "conflicts with media/output" -w -P "${floppy}.iwm.lock")
+    expect_rejection("${option}" "conflicts with media/output" -w -W "${floppy}.iwm.lock")
+endforeach()
+expect_rejection(-d "conflicts with media/output" -iw -s "${floppy}")

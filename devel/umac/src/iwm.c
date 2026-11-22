@@ -224,8 +224,12 @@ static void apply_switch(struct iwm *iwm, unsigned int address, uint64_t ticks)
                 stop_serializer(iwm);
 
         struct disk_img *disk = selected_drive(iwm);
-        if (disk && bit == IWM_STROBE && (next & IWM_STROBE))
+        if (disk && bit == IWM_STROBE && (next & IWM_STROBE)) {
+                bool had_media = disk_img_inserted(disk);
                 disk_img_command(disk, iwm_drive_register(iwm) & 7, next & IWM_PHASE2);
+                if (had_media && !disk_img_inserted(disk))
+                        rearm(iwm);
+        }
         update_head(iwm, was_reading, old_reg);
 }
 

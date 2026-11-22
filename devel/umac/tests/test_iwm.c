@@ -980,11 +980,62 @@ static void test_checkpoint(void)
         CHECK(disk_img_sense(disk, 1) && !disk_img_status(disk).dirty_sides && disk_img_sense(disk, 2));
         CHECK(stat(image_path, &current) == 0 && original.st_ino != current.st_ino);
         CHECK((original.st_mode & 07777) == (current.st_mode & 07777));
-        CHECK(disk_img_close(disk) == 0);
-        struct disk_img *reopened = disk_img_open(image_path);
+        struct disk_img *reopened = disk_img_open_writable(image_path);
         CHECK(reopened && disk_img_close(reopened) == 0);
+        CHECK(disk_img_close(disk) == 0);
         verify_image_contents(true);
         puts("Both heads survived interrupted writes, reset and failed checkpoints, then saved on eject");
+}
+
+static void verify_reinserted_track(struct iwm *iwm, bool tagged)
+{
+        command(iwm, 4, false, iwm->ticks);
+        select_register(iwm, 8, iwm->ticks);
+        uint64_t tick = disk_img_status(iwm->internal).ready_at + track_lengths[0] * DISK_IMG_BIT_TICKS;
+        iwm_advance(iwm, tick);
+        CHECK(iwm->latch & 0x80);
+        tick += DISK_IMG_BIT_TICKS;
+        struct disk_img_span span = disk_img_advance(iwm->internal, tick, true);
+        CHECK(span.count == 1);
+        verify_track(&span, 0, 0, 0, tagged);
+        iwm_advance(iwm, tick);
+}
+
+static void test_reinsert(const uint8_t *raw_image)
+{
+        struct disk_img *disk = disk_img_open(NULL);
+        struct iwm iwm;
+        CHECK(disk);
+        iwm_init(&iwm, disk, 0);
+        set_mode(&iwm, 0x1f);
+        iwm_read(&iwm, SW(MTRON), 0);
+        CHECK(sense(&iwm, 14, 0) == 0x3f && sense(&iwm, 1, 0) == 0xbf);
+
+        CHECK(disk_img_insert(disk, image_path, true) == 0);
+        CHECK(disk_img_insert(disk, image_path, false) < 0 && errno == EBUSY);
+        CHECK(sense(&iwm, 1, 0) == 0x3f && sense(&iwm, 3, 0) == 0xbf);
+        CHECK(sense(&iwm, 4, 0) == 0xbf && sense(&iwm, 13, 0) == 0xbf);
+        verify_reinserted_track(&iwm, true);
+
+        command(&iwm, 6, true, iwm.ticks);
+        CHECK(!iwm.latch && !iwm.shift && !iwm.clear_at);
+        CHECK(sense(&iwm, 1, iwm.ticks) == 0xbf && sense(&iwm, 14, iwm.ticks) == 0x3f);
+        CHECK(sense(&iwm, 4, iwm.ticks) == 0xbf && sense(&iwm, 13, iwm.ticks) == 0xbf);
+        struct disk_img *other = disk_img_open_writable(image_path);
+        CHECK(other);
+        CHECK(disk_img_insert(disk, image_path, true) < 0 && errno == EWOULDBLOCK);
+        CHECK(!disk_img_inserted(disk) && disk_img_close(other) == 0);
+
+        const uint8_t invalid[] = {0};
+        write_fixture(invalid, sizeof(invalid));
+        CHECK(disk_img_insert(disk, image_path, false) < 0 && errno == EINVAL);
+        CHECK(!disk_img_inserted(disk));
+        write_fixture(raw_image, DISK_IMG_SIZE);
+        CHECK(disk_img_insert(disk, image_path, false) == 0);
+        CHECK(sense(&iwm, 1, iwm.ticks) == 0x3f && sense(&iwm, 3, iwm.ticks) == 0x3f);
+        verify_reinserted_track(&iwm, false);
+        CHECK(disk_img_close(disk) == 0);
+        puts("Sony eject released the writable medium, and reinsertion rebuilt the track from the same path");
 }
 
 static void test_diskcopy(void)
@@ -1016,6 +1067,8 @@ static void test_diskcopy(void)
                         image[tag_start + 12 * block + i] = fixture_tag(block, i);
         }
 
+        write_fixture(image, image_size);
+        test_reinsert(image + data_start);
         write_fixture(image, image_size);
         verify_inverse(image, image_size);
         struct disk_img *disk = disk_img_open(image_path);
