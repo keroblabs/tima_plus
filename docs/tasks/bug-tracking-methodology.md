@@ -19,6 +19,8 @@ This document defines how we identify, describe, discuss, fix, review, and close
 - **Distinguish evidence from hypotheses.** A suspected defect is permissible, but must be labelled as unverified until confirmed by analysis or tests.
 - **Commit locally; do not push.** Every developer must record implementation or rework in a local `git commit`, then hand off the commit SHA and evidence. The developer must **not** execute `git push`, publish a branch, open a pull request or merge; those actions belong to the project owner after review.
 - **Track implementation commits.** Each issue retains a commit list with branch, short hash, review status, and concise change description.
+- **Visible stakeholder roles.** Each new/migrated ticket identifies `Reporter`, `Reviewer`, and `Assignee` (or `UNASSIGNED`) without inferring them from a shared Git commit identity.
+- **Current work at a glance.** New/migrated tickets have an editable `Current Work` status summary; append-only Notes remain the permanent decision history.
 - **No silent closure.** A resolved issue must say what changed, how it was verified, and who approved the conclusion.
 
 ## 2. Files and ticket ownership
@@ -79,7 +81,7 @@ Each row is a compact *current index*. It is not the place for discussion, repro
 
 ### Individual ticket — `docs/tasks/db/<ID>.md`
 
-Each file has a heading and **one ticket**, with these required fields *in this exact order*: **ID, Status, Title, Description, Details, Notes, Proposed Change, Commits, Resolution Description**. Technical subsections can be nested in Details or Proposed Change; there is no length cap.
+Each file has a heading and **one ticket**. **New and migrated tickets** use these fields *in this exact order*: **ID, Status, Title, Reporter, Reviewer, Assignee, Description, Details, Current Work, Notes, Proposed Change, Commits, Resolution Description**. Unmigrated historical tickets may keep their legacy format; do not rewrite old Notes just to meet the new template. Technical subsections can be nested in Details or Proposed Change; there is no length cap. See Section 7.1.
 
 ```markdown
 # PLUS-XXX-0001 — <Title>
@@ -87,6 +89,9 @@ Each file has a heading and **one ticket**, with these required fields *in this 
 **ID:** `PLUS-XXX-0001`
 **Status:** `OPEN`
 **Title:** <Title>
+**Reporter:** <Actor or UNKNOWN>
+**Reviewer:** <Actor or UNASSIGNED>
+**Assignee:** <Actor or UNASSIGNED>
 
 **Description**
 <Observable gap/problem/risk and why it matters.>
@@ -98,8 +103,15 @@ Each file has a heading and **one ticket**, with these required fields *in this 
 <Relative paths, code evidence, hypotheses, expected behavior,
 dependencies, constraints, reproduction and test plan.>
 
+**Current Work**
+
+| State | Work / acceptance evidence | Responsible | Next action / reference |
+| --- | --- | --- | --- |
+| DONE | Verified fact or completed task | <actor> | <evidence> |
+| PENDING | Unfinished work | <actor> | <next action> |
+
 **Notes**
-- **YYYY-MM-DD — Discovery:** <Initial observed evidence.>
+- **YYYY-MM-DD — REPORTER (actor) — Discovery:** <Initial observed evidence.>
 
 **Proposed Change**
 <Proposed implementation, alternatives and acceptance; not yet approved.>
@@ -133,15 +145,31 @@ An empty Commits table is valid until implementation commits exist. Do not add a
 
 Notes are **append-only** and contain dated entries. Add a note whenever an issue is materially investigated, its description/proposal is corrected, code is changed, a test is run, a review finds a problem, rework occurs, its status changes, or a decision is made.
 
-Suggested entry syntax:
+Suggested syntax for **new Notes**:
 
 ```markdown
-- **YYYY-MM-DD — <Activity>:** <Observation, decision, evidence, or change>
+- **YYYY-MM-DD — ROLE (actor) — Activity:** <Observation, decision, evidence, or change>
 ```
+
+Use `REPORTER`, `REVIEWER`, or `ASSIGNEE` for ROLE; preserve unverified historical Notes verbatim.
 
 Useful activity labels include `Discovery`, `Investigation`, `Decision`, `Implementation`, `Test`, `Code Review`, `Rework`, `Status Change`, and `Reopened`.
 
 Keep current Description, Details, and Proposed Change accurate; when editing their substance, append a note explaining what changed and why. Do not silently erase an earlier interpretation or unsuccessful approach. Link to commits and tests where applicable. Record reviewer approval explicitly; do not infer it from silence.
+
+### 7.1 Stakeholder attribution, Current Work and historical provenance (CPLD-DOC-0001 addendum)
+
+**Stakeholder headers.** For new and explicitly migrated tickets, the `Reporter` is the person/agent who raised the issue; the `Reviewer` evaluates evidence and accepts or rejects it; and the `Assignee` implements or verifies the work. Roles may overlap but must be recorded separately. Use a stable identifiable actor label, or `UNASSIGNED`/`UNKNOWN` if appropriate. When a reviewer or assignee changes, update the current header and append a dated role-labelled handoff Note recording who changed, the previous and new actors, and the supporting evidence. Do not infer an actor solely from a shared Git account.
+
+**Current Work summary.** Maintain a concise, **editable** four-column `**Current Work**` table: `State | Work / acceptance evidence | Responsible | Next action / reference`. Use `DONE` for evidenced completion, `PENDING` for outstanding work, and `BLOCKED` only with a dependency and clear unblock condition. Update it as work advances with references to tests, commits, Notes or review findings. This is not a replacement for append-only Notes or a second ticket index; never call a planned/unexecuted test DONE. State when evidence is developer-reported rather than reviewer-reproduced.
+
+**Prospective Notes.** Append new notes using `- **YYYY-MM-DD — ROLE (actor) — Activity:** ...` with `ROLE` equal to `REPORTER`, `REVIEWER`, or `ASSIGNEE`. Attribute the action to its actual actor. When a reviewer records an owner's manual test or decision, distinguish **who executed or decided** from **who recorded the evidence**. Git author/committer identity does not establish who requested, approved, reviewed or tested the work.
+
+**Retrospective provenance.** Preserve original historical Notes exactly: do **not** silently reword or re-label append-only legacy entries. Before attributing a legacy event, inspect `git log --follow -- <ticket-path>` plus relevant `git show <sha> -- <ticket-path>` and/or `git blame` when available. Record commit SHA, Git author/committer, any explicit in-note evidence, and attribution confidence separately in Details (e.g. a provenance table). An account name establishes who committed the text, **not necessarily the decision-maker or test executor**—especially for a shared Kerob Labs identity. If unproved, use `UNKNOWN`. Historical backfill is incremental when tickets are touched, not a mandatory bulk rewrite.
+
+**Test provenance and acceptance.** Each test record names its executor and says PASS, FAIL, NOT TESTED, or reported evidence as appropriate. Only mark an item DONE when supported. `RESOLVED` requires explicit reviewer/owner acceptance; `CLOSED` requires integration into the designated target branch or an approved no-change disposition, with that decision and integration reference recorded. Developers commit locally and hand off; the owner controls publication and merges.
+
+**Compatibility.** Legacy tickets not yet migrated need not adopt these headers immediately. `task_list.md` remains the single six-column master index and never duplicates Current Work.
 
 ## 8. Commit tracking and code review
 
