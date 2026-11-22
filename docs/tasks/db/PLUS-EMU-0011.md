@@ -2,7 +2,7 @@
 
 **ID:** `PLUS-EMU-0011`
 
-**Status:** `REVIEW`
+**Status:** `IN_PROGRESS`
 
 **Title:** Insert and reinsert the assigned uMac floppy with F11
 
@@ -26,6 +26,12 @@ uMac can insert an 800K floppy at startup with `-d`. After ejecting it through F
 - `devel/umac/src/disk_img.c` completes Sony EJECT by checkpointing dirty tracks, clearing media presence and stopping the spindle. The drive retains the old image and any writable sidecar lock until host close. The IWM drive lifecycle and Sony sense signals are defined in [Document 04 §12.10](../../04-iwm-emulation.md#1210-disk-lifecycle-insertion-eject-and-drive-power-software-and-future-stm32). [PLUS-EMU-0010](PLUS-EMU-0010.md) records the underlying checkpoint and persistence behavior.
 
 The two source observations above describe the inspected baseline. The implementation keeps the installed drive at the same address in the IWM and replaces its media state only after a successful load or checkpoint. F11 handles the first key-down while the drive is empty, consumes the host key and reloads the originally assigned path. Writable media acquire the existing sidecar lock on insertion and release it on successful eject. The launcher checks the current image and lock paths for aliases on each insertion because they can change between ejections.
+
+### Review Findings
+
+| Finding ID | Classification | Evidence | Required action / acceptance evidence | State |
+| --- | --- | --- | --- | --- |
+| `EMU11-R1` | `CORRECTION_REQUIRED` | `c7e9117` makes `-i` either a trace switch or a floppy assignment depending on the next token. | Give deferred floppy assignment its own required-argument option, `-a <floppy path>`. Verify bare `-i` traces, `-a` requires a path, and `-a <floppy path> -w` supports the Finder eject and F11 replacement cycle. | `OPEN` |
 
 ### Verification
 
@@ -72,6 +78,7 @@ To repeat the desktop check, start uMac in a private working directory with an o
 | DONE | Register owner requirements and inspect startup, input and eject code | Reporter (Codex) | Opened on the designated branch |
 | DONE | Implement assigned-path insertion and writable-media release | Assignee (Codex) | See the implementation commit and uMac README |
 | DONE | Exercise Finder eject and host replacement with the original ROM | Assignee (Codex) | See the build, test and trace evidence above |
+| PENDING | Move deferred assignment to `-a` and verify the command-line and Finder behavior | Assignee (Codex) | Address `EMU11-R1` |
 | PENDING | Review the local implementation and accept the result | Reviewer (project owner) | Review the commit and exercise the Wayland launch |
 
 **Notes**
@@ -83,6 +90,8 @@ To repeat the desktop check, start uMac in a private working directory with an o
 - **2026-11-22 — ASSIGNEE (Codex) — Rework and verification:** The first SDL run reported an incorrect error for a missing parent directory. Preserved the error from the failed path lookup and confirmed the frontend reports the missing path and can retry. The 4 MiB tagged, 1 MiB raw and production-map CTest runs passed 19/19, 18/18 and 13/13. Confirmed the Finder eject and replacement sequence using actual SDL input events and the unmodified ROM. Recorded logs, checksums and the optional sanitizer limitation above.
 - **2026-11-22 — ASSIGNEE (Codex) — Status change:** Moved `IN_PROGRESS` → `REVIEW` after verification. Owner review and acceptance are pending.
 - **2026-11-22 — ASSIGNEE (Codex) — Local commit and handoff:** Recorded the implementation, tests and verification as `c7e911787f5fe33e641886a7c47f0404b00ff16f` on the designated branch. The commit is ready for project-owner review.
+- **2026-11-22 — REVIEWER (local) — Command:** The project owner, identified in the request as `REVEWER (local)`, directed replacing `-i <floppy path>` with `-a <floppy path>` to remove the conflict with bare `-i`. Recorded `EMU11-R1` and marked `c7e9117` `CHANGES_REQUESTED`.
+- **2026-11-22 — ASSIGNEE (Codex) — Status change:** Moved `REVIEW` → `IN_PROGRESS` to implement `EMU11-R1`. The correction covers argument parsing, the CLI and launch examples, and regression verification.
 
 **Proposed Change**
 
@@ -99,7 +108,7 @@ Acceptance criteria and required evidence
 
 | Branch | Commit (short hash) | Review Status | Description |
 | --- | --- | --- | --- |
-| `pre-release-umac-disk-insert` | `c7e9117` | `UNREVIEWED` | Add F11 insertion from the configured path, release media on successful Sony eject, and retain regression evidence. |
+| `pre-release-umac-disk-insert` | `c7e9117` | `CHANGES_REQUESTED` | Add F11 insertion from the configured path, release media on successful Sony eject, and retain regression evidence. `EMU11-R1` requires a dedicated assignment option. |
 
 **Resolution Description**
 
