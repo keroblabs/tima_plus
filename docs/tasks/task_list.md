@@ -1,6 +1,6 @@
 # Tima/Plus — Master Task and Bug List
 
-**Status:** SCSI, RTC and read-only IWM are closed. PLUS-EMU-0011 (F11 insert/eject/reinsert) is owner-approved and RESOLVED, pending integration. Writable IWM and the standalone ROM tickets remain in REVIEW as of 22 November 2026.
+**Status:** SCSI, RTC, read-only IWM and F11 floppy insertion (PLUS-EMU-0011) are CLOSED on the designated `pre-release-umac` branch. CPLD-DOC-0001 is CLOSED after the stakeholder/provenance addendum and validator were integrated. PLUS-EMU-0010 remains in REVIEW pending the owner's manual floppy formatting test; the standalone ROM tickets also remain in REVIEW (22 November 2026).
 
 **Process:** [Bug-tracking methodology](bug-tracking-methodology.md)  
 **Detailed records:** [db/](db/) — **one Markdown file per ticket**  
@@ -8,7 +8,7 @@
 
 This is the **single index for all formally opened Tima/Plus tasks, defects and improvements**. Each entry is grouped by category, permanently identified, and linked to its detailed record under `db/`. All technical scope, evidence, decisions, chronological notes, commit review and resolution history live in the individual record, not here.
 
-**Current Tima/Plus totals:** 8 registered / 0 OPEN / 0 IN_PROGRESS / 3 REVIEW / 1 RESOLVED / 4 CLOSED / 0 DEFERRED.
+**Current registered totals (including CPLD-DOC-0001):** 9 registered / 0 OPEN / 0 IN_PROGRESS / 3 REVIEW / 0 RESOLVED / 6 CLOSED / 0 DEFERRED.
 
 ## PLUS-DEV — Programme milestones and cross-track work
 
@@ -23,7 +23,7 @@ No tickets formally opened under this category.
 | [`PLUS-EMU-0005`](db/PLUS-EMU-0005.md) | `TASK` | `CLOSED` | Emulate a SCSI hard disk backed by a BlueSCSI-compatible image | [PLUS-DEV-0009](../01-development-roadmap.md#plus-dev-0009--migrate-to-scsibluescsi) | [Details and history](db/PLUS-EMU-0005.md) |
 | [`PLUS-EMU-0009`](db/PLUS-EMU-0009.md) | `BUG` | `CLOSED` | Implement Macintosh Plus serial RTC and battery-backed PRAM | [PLUS-DEV-0002](../01-development-roadmap.md#plus-dev-0002--establish-the-m0001ap-hardware-profile) | [Details and history](db/PLUS-EMU-0009.md) |
 | [`PLUS-EMU-0010`](db/PLUS-EMU-0010.md) | `TASK` | `REVIEW` | Add IWM write handling and persistent virtual floppy writes | [PLUS-DEV-0004](../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) | [Details and history](db/PLUS-EMU-0010.md) |
-| [`PLUS-EMU-0011`](db/PLUS-EMU-0011.md) | `TASK` | `RESOLVED` | Insert and reinsert the assigned uMac floppy with F11 | [PLUS-DEV-0004](../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) | [Details and history](db/PLUS-EMU-0011.md) |
+| [`PLUS-EMU-0011`](db/PLUS-EMU-0011.md) | `TASK` | `CLOSED` | Insert and reinsert the assigned uMac floppy with F11 | [PLUS-DEV-0004](../01-development-roadmap.md#plus-dev-0004--complete-the-virtual-800k-floppy-subsystem) | [Details and history](db/PLUS-EMU-0011.md) |
 
 ## PLUS-ROM — Standalone firmware tests on the M0001AP hardware model
 
@@ -36,7 +36,9 @@ No tickets formally opened under this category.
 
 | ID | Kind | Status | Title | Milestone | Ticket |
 | --- | --- | --- | --- | --- | --- |
-| `CPLD-DOC-0001` | IMPROVEMENT | RESOLVED | Add stakeholder attribution and current-work summary to tickets | Engineering workflow | [Details](db/CPLD-DOC-0001.md) |
+| [`CPLD-DOC-0001`](db/CPLD-DOC-0001.md) | IMPROVEMENT | CLOSED | Add stakeholder attribution and current-work summary to tickets | Engineering workflow | [Details](db/CPLD-DOC-0001.md) |
+
+**Integration note (22 November 2026):** `pre-release-umac-disk-insert` and `pre-release-umac` were verified identical at `0144d31` before closing `PLUS-EMU-0011`. The owner directed the missing `CPLD-DOC-0001` addendum to be implemented on the current Tima/Plus working branch `pre-release-umac`; §7.1 of the [methodology](bug-tracking-methodology.md) and [`tests/test_ticket_provenance.py`](../../tests/test_ticket_provenance.py) are now present there. These integration decisions do not represent a merge into `main`.
 
 ## PLUS-SYS — Tima/Plus boot, storage, OS and desktop
 
